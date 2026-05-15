@@ -17,7 +17,15 @@ const LoggingSchema = z
     reasoningLog: z.boolean().default(false),
     usageLog: z.boolean().default(true),
   })
-  .default({});
+  // zod v4 requires .default() to receive a fully-typed value, not `{}`.
+  // We list every field explicitly here; values must match the inner
+  // .default()s above to avoid silently changing defaults.
+  .default({
+    level: 'error',
+    auditLog: true,
+    reasoningLog: false,
+    usageLog: true,
+  });
 
 /**
  * Bedrock-specific configuration. Only meaningful when `provider = bedrock`;
@@ -83,7 +91,7 @@ export const ConfigSchema = z.object({
       /** Auto-approve every command and script. Dangerous. */
       all: z.boolean().default(false),
     })
-    .default({}),
+    .default({ readOnly: true, all: false }),
   /**
    * When true, every AWS CLI command runs in interactive mode (stdio inherited
    * from the parent terminal). This is the persistent equivalent of the
@@ -117,6 +125,7 @@ export function loadConfig(): Config {
       `Config file at ${FILES.config} is not valid JSON: ${
         err instanceof Error ? err.message : String(err)
       }`,
+      { cause: err },
     );
   }
   return ConfigSchema.parse(raw);

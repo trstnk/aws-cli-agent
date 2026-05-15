@@ -9,7 +9,7 @@ export function listProfilesTool(opts: { logger: Logger }) {
   return tool({
     description:
       'List AWS named profiles configured locally in ~/.aws/config and ~/.aws/credentials. Use this when the user references an account by name and history did not resolve it.',
-    parameters: z.object({}),
+    inputSchema: z.object({}),
     execute: async () => {
       opts.logger.debug('Listing AWS profiles');
       const profiles = new Set<string>();

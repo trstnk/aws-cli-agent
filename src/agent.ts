@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { generateText, stepCountIs } from 'ai';
 import type { Logger } from './logger.js';
 import type { Config } from './config.js';
 import type { History, HistoryEntry } from './history.js';
@@ -139,20 +139,33 @@ export async function runAgent(opts: {
       },
       { role: 'user', content: userContent },
     ],
+    // The SDK warns when role:'system' messages appear in the messages array
+    // because that field is a potential prompt-injection vector for callers
+    // who template the system message from user input. In our case the
+    // system message is a hardcoded string literal (SYSTEM_PROMPT) and we
+    // need it in the messages array — not the top-level `system:` param —
+    // so we can attach providerOptions for prompt caching. Setting this
+    // flag is the SDK's documented way of saying "I'm aware, my system
+    // message is trusted."
+    allowSystemInMessages: true,
     tools,
-    maxSteps: config.maxSteps,
+    // AI SDK v5+ replaced the `maxSteps: number` setting with `stopWhen`,
+    // which accepts one or more stop conditions. stepCountIs(n) is the
+    // straight equivalent.
+    stopWhen: stepCountIs(config.maxSteps),
     onStepFinish: (step) => {
       // General logger gets a terse step marker; reasoning logger gets the
       // semantic content (text + tool calls). Tool results are too large to
       // log here — they're already in the audit log for execute_* tools.
-      logger.debug(
-        `Step finished (type=${step.stepType ?? 'n/a'}, finishReason=${step.finishReason})`,
-      );
+      logger.debug(`Step finished (finishReason=${step.finishReason})`);
       reasoning.logStep({
         reasoning: step.text ?? '',
         toolCalls: (step.toolCalls ?? []).map((c) => ({
           toolName: c.toolName,
-          args: c.args,
+          // v6: tool call payload field renamed args -> input. Dynamic
+          // (untyped) tool calls don't carry `input` on the same shape, so
+          // we read it defensively.
+          args: 'input' in c ? c.input : undefined,
         })),
         finishReason: step.finishReason,
       });
@@ -183,16 +196,16 @@ export async function runAgent(opts: {
     0;
 
   // Token usage for this invocation. result.usage carries totals across all
-  // steps. Numeric fallback to 0 guards against rare provider responses that
-  // omit a field (defensive — current Anthropic / OpenAI / Google / Bedrock
-  // all populate these reliably).
+  // steps. AI SDK v5 renamed promptTokens → inputTokens and completionTokens
+  // → outputTokens (totalTokens kept its name). Numeric fallback to 0 guards
+  // against rare provider responses that omit a field.
   usage.log({
     input,
     provider: config.provider,
     model: config.model,
     steps: result.steps.length,
-    promptTokens: result.usage?.promptTokens ?? 0,
-    completionTokens: result.usage?.completionTokens ?? 0,
+    promptTokens: result.usage?.inputTokens ?? 0,
+    completionTokens: result.usage?.outputTokens ?? 0,
     totalTokens: result.usage?.totalTokens ?? 0,
     cacheReadTokens,
     cacheWriteTokens,

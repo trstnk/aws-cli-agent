@@ -6,6 +6,27 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Dependency upgrades.** Vercel AI SDK v4 → v6, zod v3 → v4, TypeScript
+  v5 → v6, ESLint v9 → v10, `@types/node` v22 → v25, and all `@ai-sdk/*`
+  provider packages to their v6-compatible majors (`@ai-sdk/anthropic`@3,
+  `@ai-sdk/openai`@3, `@ai-sdk/google`@3, `@ai-sdk/amazon-bedrock`@4).
+  Required code changes:
+  - `generateText({ maxSteps })` → `generateText({ stopWhen: stepCountIs(n) })`
+  - Tool definition field `parameters:` → `inputSchema:`
+  - Tool call payload `args` → `input`
+  - Usage fields `promptTokens` / `completionTokens` →
+    `inputTokens` / `outputTokens` (the data we write to `usage.log` keeps
+    the legacy names — they're a stable public interface, just remapped at
+    extraction time).
+  - `createOpenAI({ compatibility: 'strict' })` removed; the option no longer
+    exists.
+  - Zod v4 `.default({})` on object schemas now requires the fully-typed
+    default value; updated `LoggingSchema` and `autoApprove` defaults.
+  - Step events from `onStepFinish` dropped the `stepType` field; the debug
+    log now only mentions `finishReason`.
+
 ### Fixed
 
 - **Interactive AWS CLI commands now work.** Previously, commands like

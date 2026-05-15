@@ -7,7 +7,7 @@ export function historyTool(opts: { history: History; logger: Logger }) {
   return tool({
     description:
       'Search the local history of past requests/commands to recover context — e.g. which AWS profile was used for a given account name, common bucket/instance names, etc. Run this EARLY (typically first) when a request mentions an account, resource, or scope by name.',
-    parameters: z.object({
+    inputSchema: z.object({
       query: z
         .string()
         .describe('Search tokens. Matched against past input, commands, profile, and resources.'),

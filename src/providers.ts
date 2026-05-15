@@ -33,7 +33,7 @@ export function createModel(config: Config): LanguageModel {
     }
     case 'openai': {
       const apiKey = requireKey(config, 'openai');
-      return createOpenAI({ apiKey, compatibility: 'strict' })(config.model);
+      return createOpenAI({ apiKey })(config.model);
     }
     case 'google': {
       const apiKey = requireKey(config, 'google');

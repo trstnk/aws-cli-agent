@@ -178,7 +178,7 @@ async function main() {
     // Verify each kind is accepted by the schema (sanity that the schema
     // hasn't drifted from what the system prompt promises the model).
     for (const kind of ['text', 'choice', 'confirm', 'secret']) {
-      const r = tools.prompt_user.parameters.safeParse({
+      const r = tools.prompt_user.inputSchema.safeParse({
         kind,
         message: 'q',
         ...(kind === 'choice' ? { choices: ['a', 'b'] } : {}),

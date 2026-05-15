@@ -68,7 +68,7 @@ export function bashScriptTool(opts: {
   return tool({
     description:
       'Execute a bash script. Use this for multi-step / multi-account workflows that need looping, jq filtering, or composition (e.g. "list all RDS Aurora databases in all accounts of org X"). The user is prompted to (a) execute the script now, (b) save it to disk for later review or scheduled execution, or (c) cancel. Always start scripts with `set -euo pipefail`.',
-    parameters: z.object({
+    inputSchema: z.object({
       script: z.string().min(1).describe('Full bash script source.'),
       purpose: z.string().describe('What this script accomplishes.'),
     }),

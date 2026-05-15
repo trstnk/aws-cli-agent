@@ -99,7 +99,7 @@ export function promptUserTool(opts: { logger: Logger }) {
       `Use kind="secret" only for short secrets typed at the moment of use (e.g. MFA codes); never solicit long-lived AWS credentials this way — they come from the user's profile. ` +
       `Use kind="text" only when free-form input is genuinely required (e.g. a new tag value the user is inventing). ` +
       `Whenever you are about to guess a value, call this tool instead.`,
-    parameters: QuestionSchema,
+    inputSchema: QuestionSchema,
     execute: async (q) => {
       const answer = await askOne(q, opts.logger);
       opts.logger.debug('Got answer', { answer: q.kind === 'secret' ? '***' : answer });
@@ -122,7 +122,7 @@ export function promptUserMultiTool(opts: { logger: Logger }) {
       `Each question MUST have a unique \`key\` — that becomes the field in the returned \`answers\` object. ` +
       `Same kind options as prompt_user: text, choice, confirm, secret. ` +
       `For unrelated questions or when the answer to question A determines what to ask in question B, use prompt_user (single) instead.`,
-    parameters: z.object({
+    inputSchema: z.object({
       questions: z
         .array(QuestionSchema)
         .min(1)
