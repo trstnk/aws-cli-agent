@@ -1,0 +1,67 @@
+name: Release
+
+# Triggered when you publish a GitHub Release (recommended) or push a tag
+# matching v*.*.* (fallback). Using the GitHub Release path is preferred
+# because it gives you release notes and a clear UI gesture for "this is
+# the version I want on npm."
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Provenance attestation requires write permissions on id-token; contents
+# read is enough for actions/checkout.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build, test, and publish to npm
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Pin to LTS for publishing. The matrix is for CI; releases are
+          # one canonical environment.
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Verify tag matches package.json version
+        # Guards against the release-time mistake of tagging v0.4.0 while
+        # package.json still says 0.3.0. Fails fast before we waste time
+        # on the build.
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          # Use GITHUB_REF_NAME for both `release` and `push tag` events.
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version OK: $PKG_VERSION"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Re-run the full CI pipeline before publishing. Belt and suspenders:
+      # the branch CI should already have passed, but tags can be cut from
+      # any commit, including ones that bypassed branch protection.
+      - name: Full CI (lint, typecheck, build, test)
+        run: npm run ci
+
+      - name: Publish to npm
+        # --provenance adds supply-chain attestation. Requires id-token: write
+        # (granted above) and a public npm package.
+        # --access public is required for scoped packages on the free plan;
+        # harmless for unscoped packages like this one.
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

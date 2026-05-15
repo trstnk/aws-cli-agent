@@ -1,0 +1,12 @@
+src/
+scripts/
+node_modules/
+.github/
+tsconfig.json
+eslint.config.js
+CONTRIBUTING.md
+.gitignore
+.nvmrc
+*.log
+.env*
+.DS_Store
