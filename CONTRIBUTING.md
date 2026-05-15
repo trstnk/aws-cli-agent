@@ -43,23 +43,28 @@ npm test            # smoke test against the built CLI
 
 ## Cutting a release
 
-The release workflow publishes to npm on either a published GitHub Release
-or a pushed tag matching `v*.*.*`. Either path requires the `NPM_TOKEN`
-repository secret.
+The release workflow publishes to npm when a **GitHub Release** is published.
+Requires the `NPM_TOKEN` repository secret.
 
 1. **Update the version** in `package.json` (also update `VERSION` in
    `src/cli.ts` to match, and add a section to `CHANGELOG.md`).
 2. **Commit and merge** the version bump to `main`.
-3. **Tag and push**:
-   ```bash
-   git tag v0.4.0
-   git push origin v0.4.0
-   ```
-   …or create a GitHub Release through the web UI, which gives you a release
-   notes editor on the way.
-4. The `Release` workflow does the rest: it verifies `package.json` version
+3. **Create a GitHub Release**:
+   - Web UI: **Releases → Draft a new release**. Set the tag to `vX.Y.Z`
+     (created on publish), pick `main` as the target, write release notes
+     (or auto-generate from PR titles), then **Publish release**.
+   - CLI alternative: `gh release create v0.4.0 --notes "..."` — `gh` creates
+     the tag for you in the same step.
+4. The `Release` workflow does the rest: verifies `package.json` version
    matches the tag, runs the full CI pipeline, then publishes to npm with
    provenance attestation.
+
+> **Why not `git push --tags` to publish?** The workflow listens only for
+> the `release:published` event, not raw tag pushes. Listening for both
+> would race two workflow runs for the same publish; the second always
+> fails with "cannot publish over previously published versions." Using
+> GitHub Releases also gives you a release-notes editor and a proper
+> deletable-if-broken artifact, which raw tags don't.
 
 ### One-time setup
 

@@ -1,15 +1,13 @@
 name: Release
 
-# Triggered when you publish a GitHub Release (recommended) or push a tag
-# matching v*.*.* (fallback). Using the GitHub Release path is preferred
-# because it gives you release notes and a clear UI gesture for "this is
-# the version I want on npm."
+# Triggered ONLY when you publish a GitHub Release. Creating a Release in the
+# GitHub UI (or via `gh release create vX.Y.Z`) creates the tag for you and
+# fires this workflow once. Do NOT also listen for `push: tags` — that would
+# cause two workflow runs to race for the same publish, and the second one
+# always fails with "cannot publish over previously published versions."
 on:
   release:
     types: [published]
-  push:
-    tags:
-      - 'v*.*.*'
 
 # Provenance attestation requires write permissions on id-token; contents
 # read is enough for actions/checkout.
@@ -37,10 +35,10 @@ jobs:
       - name: Verify tag matches package.json version
         # Guards against the release-time mistake of tagging v0.4.0 while
         # package.json still says 0.3.0. Fails fast before we waste time
-        # on the build.
+        # on the build. GITHUB_REF_NAME is the release's tag name for
+        # release:published events (e.g. "v0.3.1").
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          # Use GITHUB_REF_NAME for both `release` and `push tag` events.
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
             echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
