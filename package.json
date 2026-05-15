@@ -42,6 +42,14 @@
     "bedrock"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trstnk/aws-cli-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/trstnk/aws-cli-agent/issues"
+  },
+  "homepage": "https://github.com/trstnk/aws-cli-agent#readme",
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.106",
     "@ai-sdk/anthropic": "^3.0.78",
