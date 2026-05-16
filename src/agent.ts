@@ -175,42 +175,43 @@ export async function runAgent(opts: {
   logger.info(`Agent finished after ${result.steps.length} step(s)`);
   logger.debug('Final text', result.text);
 
-  // Extract cache hit/miss token counts from provider-specific metadata.
-  // Anthropic exposes them on result.providerMetadata.anthropic.* (camelCase),
-  // Bedrock on result.providerMetadata.bedrock.* with slightly different
-  // names. Other providers won't have these fields; missing → 0.
+  // Token usage for this invocation.
   //
-  // Note: providerMetadata on the *result* aggregates the last step's values,
-  // not totals across steps. For caching analysis the first-step values
-  // (write tokens) and later-step values (read tokens) both matter. The AI
-  // SDK doesn't aggregate them; if you want per-step accuracy, parse
-  // reasoning.log. The single-line totals here are the headline numbers.
-  const pm = (result.providerMetadata ?? {}) as Record<string, Record<string, unknown>>;
-  const cacheReadTokens =
-    toNumber(pm.anthropic?.cacheReadInputTokens) ||
-    toNumber(pm.bedrock?.cacheReadInputTokens) ||
-    0;
-  const cacheWriteTokens =
-    toNumber(pm.anthropic?.cacheCreationInputTokens) ||
-    toNumber(pm.bedrock?.cacheWriteInputTokens) ||
-    0;
+  // In AI SDK v5/v6, `result.usage` is only the LAST step's tokens — confusingly
+  // named. `result.totalUsage` is the sum across all steps. We want totalUsage.
+  //
+  // Cache hit/miss counts live in `totalUsage.inputTokenDetails`. The SDK
+  // normalizes these across providers — no need to dig into provider-specific
+  // metadata. The previous code path that read providerMetadata.{anthropic,
+  // bedrock}.* was looking in the wrong place; cache counts in providerMetadata
+  // are raw, per-provider, and located differently per provider (Bedrock nests
+  // them under `usage`, Anthropic doesn't). inputTokenDetails is the
+  // recommended cross-provider surface.
+  //
+  // We still dump per-step providerMetadata at trace level for debugging —
+  // useful when caching numbers look wrong and you want to see exactly what
+  // the provider returned.
+  for (const step of result.steps) {
+    const pm = step.providerMetadata;
+    if (pm) logger.trace(`step ${step.stepNumber} providerMetadata`, pm);
+  }
 
-  // Token usage for this invocation. result.usage carries totals across all
-  // steps. AI SDK v5 renamed promptTokens → inputTokens and completionTokens
-  // → outputTokens (totalTokens kept its name). Numeric fallback to 0 guards
-  // against rare provider responses that omit a field.
+  const td = result.totalUsage?.inputTokenDetails;
+  const cacheReadTokens = toNumber(td?.cacheReadTokens);
+  const cacheWriteTokens = toNumber(td?.cacheWriteTokens);
+
   usage.log({
     input,
     provider: config.provider,
     model: config.model,
     steps: result.steps.length,
-    promptTokens: result.usage?.inputTokens ?? 0,
-    completionTokens: result.usage?.outputTokens ?? 0,
-    totalTokens: result.usage?.totalTokens ?? 0,
+    promptTokens: result.totalUsage?.inputTokens ?? 0,
+    completionTokens: result.totalUsage?.outputTokens ?? 0,
+    totalTokens: result.totalUsage?.totalTokens ?? 0,
     cacheReadTokens,
     cacheWriteTokens,
   });
-  logger.debug('Usage', { ...result.usage, cacheReadTokens, cacheWriteTokens });
+  logger.debug('Usage', { ...result.totalUsage, cacheReadTokens, cacheWriteTokens });
 
   // Find the last successful execution — its stdout IS the answer to the user.
   // (Intermediate discovery calls are scaffolding; we don't print them.)
