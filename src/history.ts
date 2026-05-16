@@ -7,6 +7,19 @@ export type HistoryEntry = {
   input: string;
   commands: string[];
   profile: string | null;
+  /**
+   * Resources is currently not used.
+   * Intention: Capture the named resources the agent worked with on each run, keyed by type.
+   * So a history entry for "list buckets in btc-cloud-sandbox" might end up as:
+   * json{
+   *   "input": "list buckets in my-account",
+   *   "commands": ["aws s3 ls --profile my-account"],
+   *   "profile": "my-account",
+   *   "resources": {
+   *     "account": "my-account"
+   *   }
+   * }
+   */
   resources: Record<string, string>;
   success: boolean;
 };
