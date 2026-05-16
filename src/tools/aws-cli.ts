@@ -13,22 +13,13 @@ const READ_ONLY_VERBS = [
   /^lookup-/,
   /^batch-get-/,
   /^head-/,
+  /^filter-/,
   /^scan$/,
   /^query$/,
 ];
 
 const READ_ONLY_FULL = [
   /^s3\s+ls(\s|$)/,
-  /^sts\s+get-caller-identity(\s|$)/,
-  /^organizations\s+list-accounts(\s|$)/,
-  /^organizations\s+describe-/,
-  /^ec2\s+describe-/,
-  /^eks\s+(describe|list)-/,
-  /^rds\s+describe-/,
-  /^iam\s+(get|list)-/,
-  /^ssm\s+(describe|list|get)-/,
-  /^cloudformation\s+(describe|list)-/,
-  /^logs\s+(describe|filter|get)-/,
 ];
 
 /**
@@ -134,7 +125,7 @@ function runInteractive(
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, {
       env: process.env,
-      stdio: 'inherit', // ← the fix: child reuses parent's stdin/stdout/stderr
+      stdio: 'inherit', // child reuses parent's stdin/stdout/stderr
     });
     proc.on('error', reject);
     proc.on('close', (code) =>
