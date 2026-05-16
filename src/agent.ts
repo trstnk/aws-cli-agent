@@ -1,4 +1,4 @@
-import { generateText, stepCountIs } from 'ai';
+import { streamText, stepCountIs } from 'ai';
 import type { Logger } from './logger.js';
 import type { Config } from './config.js';
 import type { History, HistoryEntry } from './history.js';
@@ -50,13 +50,25 @@ export type RunResult = {
   /** Model's free-form text. Useful only for the "no command ran" error path. */
   text: string;
   steps: number;
+  /**
+   * All commands the agent attempted, including ones the user declined or
+   * cancelled. Used for the history log (the trail is more useful with all
+   * attempts visible). For the user-facing "ran N commands" footer, use
+   * `executedCommandCount` instead.
+   */
   commands: string[];
+  /**
+   * Count of commands that actually ran (executed and produced an exit
+   * code, whether 0 or non-zero). Excludes declines/cancellations so the
+   * footer doesn't claim "ran 2 commands" when one was just refused.
+   */
+  executedCommandCount: number;
   profile: string | null;
-  /** The verbatim stdout of the last successful execute_* call, or null. */
+  /** The verbatim stdout of the last execute_* call when it succeeded, or null. */
   finalOutput: string | null;
   /** The verbatim stderr of the last execute_* call if it failed, or null. */
   finalError: string | null;
-  /** Did any execute_* call run successfully? */
+  /** Did the last execute_* call run successfully? */
   ranCommand: boolean;
 };
 
@@ -76,6 +88,21 @@ export async function runAgent(opts: {
   const record = (entry: import('./tools/index.js').ExecutionRecord) => {
     executions.push(entry);
   };
+
+  // Whether to enable prompt caching for this run. Anthropic and Bedrock
+  // support an explicit `cacheControl` / `cachePoint` marker on the system
+  // message — see `systemMessageProviderOptions` below. OpenAI auto-caches
+  // prompts over 1,024 tokens with no opt-in needed; Google Gemini's caching
+  // API is structurally different and not wired up. If caching=false in
+  // config, we don't send markers anywhere.
+  //
+  // Note: only the system message gets cached. Marking individual tool
+  // definitions does not work — the Bedrock provider drops tool-level
+  // providerOptions before serializing the request. See the comment in
+  // tools/index.ts. So the cached prefix is the system prompt only;
+  // the tools array is sent at full cost on every request.
+  const useCaching =
+    config.caching && (config.provider === 'anthropic' || config.provider === 'bedrock');
 
   const tools = createTools({ logger, config, history, audit, record });
   const model = createModel(config);
@@ -99,17 +126,6 @@ export async function runAgent(opts: {
         .join('\n')
     : '';
 
-  // Whether to enable prompt caching for this run. Caching is provider-
-  // specific: Anthropic + Bedrock support an explicit `cacheControl` /
-  // `cachePoint` marker per content block. OpenAI auto-caches prompts
-  // over 1024 tokens with no opt-in needed (and ignores any marker we
-  // send). Google's caching API is structurally different and the SDK
-  // doesn't currently expose it in a way we can wire up uniformly, so we
-  // skip it. The flag itself is honored regardless: if you set
-  // caching=false, we don't send markers anywhere.
-  const useCaching =
-    config.caching && (config.provider === 'anthropic' || config.provider === 'bedrock');
-
   // The cached prefix is the SYSTEM PROMPT only — kept byte-stable across
   // invocations. The per-invocation history hint goes in the user message
   // where it can't invalidate the cache. Tool definitions are part of the
@@ -129,7 +145,17 @@ export async function runAgent(opts: {
     ? `${historyHint}\n\n---\n\nUser request: ${input}`
     : input;
 
-  const result = await generateText({
+  // Closure variables shared between the streamText callback and the
+  // for-await loop below. Hoisted above streamText so the callback can read
+  // them. start-step sets toolCallStepNumber to the current step number so
+  // onToolCallStart knows which step to label the tool-call line with.
+  let stepCounter = 0;
+  let toolCallStepNumber = 0;
+  let currentReasoning = '';
+  let currentToolCalls: Array<{ toolName: string; args: unknown }> = [];
+  let reasoningEchoed = false;
+
+  const result = streamText({
     model,
     messages: [
       {
@@ -153,27 +179,88 @@ export async function runAgent(opts: {
     // which accepts one or more stop conditions. stepCountIs(n) is the
     // straight equivalent.
     stopWhen: stepCountIs(config.maxSteps),
-    onStepFinish: (step) => {
-      // General logger gets a terse step marker; reasoning logger gets the
-      // semantic content (text + tool calls). Tool results are too large to
-      // log here — they're already in the audit log for execute_* tools.
-      logger.debug(`Step finished (finishReason=${step.finishReason})`);
-      reasoning.logStep({
-        reasoning: step.text ?? '',
-        toolCalls: (step.toolCalls ?? []).map((c) => ({
-          toolName: c.toolName,
-          // v6: tool call payload field renamed args -> input. Dynamic
-          // (untyped) tool calls don't carry `input` on the same shape, so
-          // we read it defensively.
-          args: 'input' in c ? c.input : undefined,
-        })),
-        finishReason: step.finishReason,
-      });
+    // Print the tool-call line synchronously before execute() runs. We use
+    // this callback rather than the `tool-call` event in fullStream because
+    // the SDK launches execute() as a concurrent task — by the time our
+    // for-await loop sees `tool-call` in the stream, execute may already
+    // be running (or done). This callback fires inline, immediately before
+    // execute(), guaranteeing the tool-call line appears above any
+    // approval prompt the tool's execute() shows.
+    experimental_onToolCallStart: (event) => {
+      const input = 'input' in event.toolCall ? event.toolCall.input : undefined;
+      reasoning.echoToolCall(toolCallStepNumber, event.toolCall.toolName, input);
+      currentToolCalls.push({ toolName: event.toolCall.toolName, args: input });
     },
   });
 
-  logger.info(`Agent finished after ${result.steps.length} step(s)`);
-  logger.debug('Final text', result.text);
+  // Drive the agent by consuming the full stream. The reasoning text
+  // streams as text-delta events; we accumulate it and echo on text-end
+  // so the user sees it BEFORE the tool-call line (which prints from the
+  // onToolCallStart callback above, synchronously before execute()).
+  //
+  // Two execution sites collaborate to print one step:
+  //   1. text-end (here) → reasoning text line
+  //   2. onToolCallStart (callback above) → tool: line, then execute()
+
+  for await (const part of result.fullStream) {
+    switch (part.type) {
+      case 'start-step': {
+        stepCounter += 1;
+        toolCallStepNumber = stepCounter; // visible to onToolCallStart
+        currentReasoning = '';
+        currentToolCalls = [];
+        reasoningEchoed = false;
+        break;
+      }
+      case 'text-delta': {
+        currentReasoning += part.text;
+        break;
+      }
+      case 'text-end': {
+        if (!reasoningEchoed) {
+          reasoning.echoReasoning(stepCounter, currentReasoning);
+          reasoningEchoed = true;
+        }
+        break;
+      }
+      case 'tool-call': {
+        // Backup echo path: if text-end didn't fire (provider variant or
+        // text-less step), echo whatever reasoning we have when we see
+        // tool-call. The tool-call LINE itself is NOT printed here — it's
+        // printed by experimental_onToolCallStart, which fires
+        // synchronously before execute() and guarantees ordering above
+        // any approval prompt.
+        if (!reasoningEchoed) {
+          reasoning.echoReasoning(stepCounter, currentReasoning);
+          reasoningEchoed = true;
+        }
+        break;
+      }
+      case 'finish-step': {
+        reasoning.logStepToFile({
+          step: stepCounter,
+          reasoning: currentReasoning,
+          toolCalls: currentToolCalls,
+          finishReason: part.finishReason,
+        });
+        logger.debug(`Step ${stepCounter} finished (finishReason=${part.finishReason})`);
+        break;
+      }
+      // Other event types (reasoning-delta for thinking-models,
+      // tool-input-delta, source, file, raw, etc.) are ignored —
+      // fullStream is forward-compatible.
+    }
+  }
+
+  // Wait for all the post-stream promises to resolve. They're already
+  // ready by the time fullStream finishes (the stream completion is the
+  // signal), so these awaits are effectively synchronous.
+  const finalText = await result.text;
+  const finalSteps = await result.steps;
+  const totalUsage = await result.totalUsage;
+
+  logger.info(`Agent finished after ${finalSteps.length} step(s)`);
+  logger.debug('Final text', finalText);
 
   // Token usage for this invocation.
   //
@@ -191,12 +278,12 @@ export async function runAgent(opts: {
   // We still dump per-step providerMetadata at trace level for debugging —
   // useful when caching numbers look wrong and you want to see exactly what
   // the provider returned.
-  for (const step of result.steps) {
+  for (const step of finalSteps) {
     const pm = step.providerMetadata;
     if (pm) logger.trace(`step ${step.stepNumber} providerMetadata`, pm);
   }
 
-  const td = result.totalUsage?.inputTokenDetails;
+  const td = totalUsage?.inputTokenDetails;
   const cacheReadTokens = toNumber(td?.cacheReadTokens);
   const cacheWriteTokens = toNumber(td?.cacheWriteTokens);
 
@@ -204,25 +291,35 @@ export async function runAgent(opts: {
     input,
     provider: config.provider,
     model: config.model,
-    steps: result.steps.length,
-    promptTokens: result.totalUsage?.inputTokens ?? 0,
-    completionTokens: result.totalUsage?.outputTokens ?? 0,
-    totalTokens: result.totalUsage?.totalTokens ?? 0,
+    steps: finalSteps.length,
+    promptTokens: totalUsage?.inputTokens ?? 0,
+    completionTokens: totalUsage?.outputTokens ?? 0,
+    totalTokens: totalUsage?.totalTokens ?? 0,
     cacheReadTokens,
     cacheWriteTokens,
   });
-  logger.debug('Usage', { ...result.totalUsage, cacheReadTokens, cacheWriteTokens });
+  logger.debug('Usage', { ...totalUsage, cacheReadTokens, cacheWriteTokens });
 
-  // Find the last successful execution — its stdout IS the answer to the user.
-  // (Intermediate discovery calls are scaffolding; we don't print them.)
-  const lastOk = [...executions].reverse().find((e) => e.ok) ?? null;
-  const lastAny = executions.length > 0 ? executions[executions.length - 1] : null;
+  // Determine what to show the user as the final output. Rule: the LAST
+  // execution wins, regardless of success — and if it failed or was
+  // declined, no stdout is printed at all (we only have intermediate
+  // scaffolding output left, which the user didn't ask for).
+  //
+  // Previously we used `find((e) => e.ok)`, which selected the most recent
+  // *successful* call. That was wrong when the final intended action was
+  // declined or failed: the heuristic fell back to an earlier discovery
+  // call (describe-instances, list-buckets, etc.) and printed its JSON as
+  // if it were the user's answer — confusing because it wasn't.
+  //
+  // For an empty run (no executions, e.g. the agent just talked) we have
+  // nothing to print and `finalOutput` stays null.
+  const last = executions.length > 0 ? executions[executions.length - 1] : null;
   const lastProfile =
     [...executions].reverse().find((e) => e.profile)?.profile ?? null;
 
-  const finalOutput = lastOk?.stdout ?? null;
-  const finalError = lastOk ? null : (lastAny?.stderr ?? null);
-  const ranCommand = lastOk !== null;
+  const finalOutput = last?.ok ? last.stdout : null;
+  const finalError = last && !last.ok ? last.stderr : null;
+  const ranCommand = last?.ok === true;
 
   const entry: HistoryEntry = {
     timestamp: new Date().toISOString(),
@@ -234,10 +331,17 @@ export async function runAgent(opts: {
   };
   history.append(entry);
 
+  // "Executed" = the subprocess actually ran. Declines/cancellations use
+  // exitCode -1 by convention (no process was ever spawned); successes use
+  // 0, real failures use a non-zero exit. We count anything that has a real
+  // exit code (≥ 0), so the user-facing footer reflects reality.
+  const executedCommandCount = executions.filter((e) => e.exitCode >= 0).length;
+
   return {
-    text: result.text,
-    steps: result.steps.length,
+    text: finalText,
+    steps: finalSteps.length,
     commands: executions.map((e) => e.cmd),
+    executedCommandCount,
     profile: lastProfile,
     finalOutput,
     finalError,

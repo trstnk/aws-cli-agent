@@ -125,7 +125,7 @@ function runInteractive(
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, {
       env: process.env,
-      stdio: 'inherit', // child reuses parent's stdin/stdout/stderr
+      stdio: 'inherit', // ← the fix: child reuses parent's stdin/stdout/stderr
     });
     proc.on('error', reject);
     proc.on('close', (code) =>
@@ -185,6 +185,10 @@ export function awsCliTool(opts: {
         !useInteractive &&
         (opts.config.autoApprove.all || (opts.config.autoApprove.readOnly && readOnly));
 
+      // Extract profile up-front so the declined-branch audit/record
+      // entries can include it. extractProfile just scans args, no I/O.
+      const profile = extractProfile(effectiveArgs);
+
       if (!autoApprove) {
         process.stderr.write('\n');
         process.stderr.write(`${chalk.bold('  Reason:  ')}${purpose}\n`);
@@ -197,13 +201,34 @@ export function awsCliTool(opts: {
         const ok = await confirm({ message: 'Execute this command?', default: true });
         if (!ok) {
           opts.logger.warn('User declined command');
+          // Record the declined call so the agent's end-of-run logic sees
+          // that the last action was a refusal, not the most recent
+          // successful intermediate call. Without this, cli.ts would print
+          // the stdout of an earlier describe/list call as if it were the
+          // final answer — confusing the user with scaffolding output.
+          // Audit log gets a separate marker for the same reason: clear
+          // trail of "user said no" rather than absence-of-record.
+          opts.audit.logCommand({
+            cmd: display,
+            profile,
+            exitCode: -1,
+            ok: false,
+            stdout: '',
+            stderr: '[declined by user]',
+          });
+          opts.record({
+            cmd: display,
+            profile,
+            stdout: '',
+            stderr: '[declined by user]',
+            exitCode: -1,
+            ok: false,
+          });
           return { ok: false, declined: true, error: 'User declined to execute this command.' };
         }
       } else {
         opts.logger.debug(`Auto-approved (${readOnly ? 'read-only' : 'all'})`);
       }
-
-      const profile = extractProfile(effectiveArgs);
 
       try {
         const { stdout, stderr, code } = useInteractive

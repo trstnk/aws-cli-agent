@@ -105,6 +105,26 @@ export function bashScriptTool(opts: {
 
       if (action === 'cancel') {
         opts.logger.warn('User cancelled script');
+        // Record the cancelled call so the agent's end-of-run logic sees
+        // refusal as the final action, not an earlier successful step.
+        // See the parallel comment in aws-cli.ts for the reasoning.
+        const cmdLabel = `[bash script: ${purpose}]`;
+        opts.audit.logCommand({
+          cmd: cmdLabel,
+          profile: null,
+          exitCode: -1,
+          ok: false,
+          stdout: '',
+          stderr: '[cancelled by user]',
+        });
+        opts.record({
+          cmd: cmdLabel,
+          profile: null,
+          stdout: '',
+          stderr: '[cancelled by user]',
+          exitCode: -1,
+          ok: false,
+        });
         return {
           ok: false,
           declined: true,

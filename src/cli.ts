@@ -165,10 +165,21 @@ export async function main(argv: string[]): Promise<void> {
         // Everything else (reasoning, prompts, status, commands executed) goes
         // to stderr via the logger. This keeps `aca ... | jq` and similar
         // pipelines working as if the user ran aws directly.
+        // Decide what reaches the user's terminal:
+        // - Successful final command → its stdout goes to stdout (pipeable).
+        // - Genuine failure (non-zero exit, spawn error, etc.) → its stderr
+        //   goes to stderr in red, and the process exits 1.
+        // - User declined/cancelled → quiet exit. The agent's text response
+        //   (if any) tells the user the action was cancelled; no red noise.
+        // - Nothing useful → fall back to the agent's final text, if any.
+        const wasDeclined =
+          result.finalError === '[declined by user]' ||
+          result.finalError === '[cancelled by user]';
+
         if (result.ranCommand && result.finalOutput !== null) {
           process.stdout.write(result.finalOutput);
           if (!result.finalOutput.endsWith('\n')) process.stdout.write('\n');
-        } else if (result.finalError) {
+        } else if (result.finalError && !wasDeclined) {
           process.stderr.write(chalk.red(result.finalError));
           if (!result.finalError.endsWith('\n')) process.stderr.write('\n');
           process.exitCode = 1;
@@ -176,10 +187,15 @@ export async function main(argv: string[]): Promise<void> {
           process.stderr.write(result.text.trim() + '\n');
         }
 
-        if (result.commands.length > 0) {
+        // Footer counts only commands that actually executed. Declined or
+        // cancelled commands appear in `result.commands` for the history
+        // log but don't count as "ran" since no subprocess was started.
+        if (result.executedCommandCount > 0) {
           const tag = result.profile ? `[${result.profile}]` : '';
           const cmds =
-            result.commands.length === 1 ? '1 command' : `${result.commands.length} commands`;
+            result.executedCommandCount === 1
+              ? '1 command'
+              : `${result.executedCommandCount} commands`;
           process.stderr.write(chalk.dim(`\nran ${cmds} ${tag}\n`));
         }
       } catch (err) {
