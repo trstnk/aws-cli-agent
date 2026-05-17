@@ -4,17 +4,34 @@
 
 You describe what you want in plain English. The agent searches your local history, lists your AWS profiles, runs read-only discovery calls to resolve resources, prompts you for anything ambiguous, and executes the final command — after asking for permission.
 
-```
-$ aca "start ssm session to instance test-instance in abc-xyz"
-  Reason:  resolve instance id for test-instance
-  Command: aws ec2 describe-instances --filters Name=tag:Name,Values=test-instance \
-           --output json --profile abc-xyz
-  ✓ auto-approved (read-only)
+## Examples
 
-  Reason:  start interactive SSM session
-  Command: aws ssm start-session --target i-0123abc --profile abc-xyz
-? Execute this command? (Y/n)
+```bash
+# Interactive session to an instance the agent has to look up
+aca "start ssm session to instance my-instance in my-account"
+
+# Use the AWS CLI's table output for human consumption
+aca "print tags of gitlab instance as table"
+
+# Cross-resource composition: instances, their IAM roles, and the attached policies
+aca "list ec2 instance id, name, instance profile arn plus the iam policies in the attached iam role as json in my-account"
 ```
+
+The first example is interactive — the agent runs a read-only `describe-instances` to resolve the name, then prompts before opening the SSM session. The second produces a table on stdout, pipeable to `less` or `grep`. The third is the kind of request where the agent will most likely build a bash script with `jq` plumbing rather than chain individual AWS CLI calls.
+
+## ⚠️ Warning — read before using
+
+`aca` runs real AWS CLI commands against your real AWS accounts. Treat it accordingly.
+
+- **The agent executes AWS CLI commands on your behalf.** Commands run with whatever credentials and roles your local `aws` CLI is configured to use. Anything you can do interactively, `aca` can do. Anything an attacker who got your credentials could do, a hallucinating model could do too.
+- **Models hallucinate.** The agent is instructed not to guess and to ask for missing information, but model behavior is statistical, not contractual. A misinterpreted request can produce an unintended command. Always read the `Reason:` / `Command:` block before pressing `y`.
+- **Auto-approve is dangerous.** `autoApprove.readOnly: true` (the default) skips the prompt only for non-mutating commands (`describe-*`, `list-*`, `get-*`, `s3 ls`). `autoApprove.all: true` skips the prompt for **every** command — a misrouted `delete-*` or `terminate-*` can ruin your weekend or your career. Set it only in tightly scoped one-off workflows, never as a persistent default.
+- **Bash scripts are arbitrary code.** When the agent generates a bash script for multi-account or composition workflows, the script can do anything your shell can. Read it before you press execute. The "save to disk" option exists so you can review it in your editor first; use it when in doubt.
+- **Watch the bill.** Every invocation sends a prompt to your LLM provider and pays for tokens. Token totals per run are logged in `usage.log` (`cat ~/.local/state/aws-cli-agent/usage.log | jq -s 'map(.totalTokens) | add'`). Caching is on by default and cuts ~25-40% off input costs for frequent users; if you invoke `aca` rarely (once an hour or less) the cache writes don't pay back and you can set `caching: false`.
+- **Your prompts go to the model provider.** AWS CLI output is fed back to the model as part of subsequent steps. That means resource names, instance IDs, tag values, and any other data that appears in command output is transmitted to Anthropic / OpenAI / Google / Bedrock (depending on your provider choice). The provider does not retain this data beyond the request itself (and the cache TTL, ~5 minutes for cached prefixes), but **confirm this is compatible with the policies you have to respect** before pointing `aca` at sensitive accounts.
+- **Provider terms apply.** When you use a provider, you agree to that provider's terms of service. For Bedrock, that's AWS's own terms (data stays in your AWS account boundary). For Anthropic / OpenAI / Google, that's their respective enterprise / API terms. Read them.
+- **Audit log is your friend.** Every executed command — including its stdout, stderr, and exit code — lands in `audit.log` (JSONL). If you ever need to reconstruct what happened, it's all there. Don't disable `logging.auditLog` unless you have a specific reason.
+- **No warranty.** **You use this agent at your own risk.** The authors are not responsible for unintended AWS API calls, deleted resources, exceeded budgets, or any other damage caused by using this tool. If you wouldn't run `aws` commands blindly from a script you found in someone's gist, don't run `aca` blindly either.
 
 ## Installation
 
@@ -50,6 +67,8 @@ aca "list all s3 buckets in account my-staging"
 
 Config file: `$XDG_CONFIG_HOME/aws-cli-agent/config.json` (defaults to `~/.config/aws-cli-agent/config.json`).
 
+Default contents (created by `aca config`):
+
 ```json
 {
   "provider": "anthropic",
@@ -58,13 +77,16 @@ Config file: `$XDG_CONFIG_HOME/aws-cli-agent/config.json` (defaults to `~/.confi
   "logging": {
     "level": "error",
     "auditLog": true,
-    "reasoningLog": false
+    "reasoningLog": false,
+    "usageLog": true
   },
+  "caching": true,
   "verbose": false,
   "autoApprove": {
     "readOnly": true,
     "all": false
   },
+  "forceInteractive": false,
   "historyLimit": 200
 }
 ```
@@ -73,6 +95,7 @@ Optional fields (omit if you don't need them):
 
 ```json
 {
+  "apiKeyEnv": "MY_CUSTOM_ANTHROPIC_KEY",
   "defaultRegion": "eu-west-1",
   "scriptFolder": "/home/me/aws-scripts",
   "bedrock": {
@@ -92,11 +115,12 @@ Optional fields (omit if you don't need them):
 | `bedrock` | — | Bedrock-specific settings (see below). Only used when `provider = "bedrock"`. |
 | `defaultRegion` | — | AWS region injected into every AWS CLI command when the agent didn't specify one |
 | `caching` | `true` | Enable prompt caching for providers that support it. See "Prompt caching" below. |
-| `maxSteps` | `15` | Hard cap on agent reasoning/tool steps per request |
-| `logging` | see below | All logging knobs (see below) |
+| `maxSteps` | `15` | Hard cap on agent reasoning/tool steps per request (range 1-50) |
+| `logging` | see below | All logging knobs |
 | `verbose` | `false` | Echo agent reasoning to the console as it runs |
 | `autoApprove.readOnly` | `true` | Skip prompt for read-only AWS CLI commands (`describe-*` / `list-*` / `get-*` / `s3 ls`) |
 | `autoApprove.all` | `false` | Skip prompt for **all AWS CLI commands** including mutating ones. Does NOT apply to bash scripts — those always prompt. |
+| `forceInteractive` | `false` | Run every AWS CLI command with inherited stdio. Persistent equivalent of `--interactive`/`-i`. Almost always leave unset and use the CLI flag for one-offs. |
 | `historyLimit` | `200` | Max history entries kept in memory for context |
 | `scriptFolder` | `$XDG_DATA_HOME/aws-cli-agent/scripts` | Where saved bash scripts are written |
 
@@ -106,7 +130,8 @@ Optional fields (omit if you don't need them):
 "logging": {
   "level": "error",
   "auditLog": true,
-  "reasoningLog": false
+  "reasoningLog": false,
+  "usageLog": true
 }
 ```
 
@@ -115,13 +140,9 @@ Optional fields (omit if you don't need them):
 | `logging.level` | `error` | General-log verbosity: `silent` \| `error` \| `warn` \| `info` \| `debug` \| `trace`. Override per run with `--log-level`. |
 | `logging.auditLog` | `true` | Write `audit.log` — JSONL trail of every executed command/script with full stdout/stderr/exit code. Bash scripts also log full source. |
 | `logging.reasoningLog` | `false` | Write `reasoning.log` — text record of agent reasoning steps and tool calls. |
-| `logging.usageLog` | `true` | Write `usage.log` — one JSONL entry per `aca` invocation with token totals (input + completion + total). One line per run. |
+| `logging.usageLog` | `true` | Write `usage.log` — one JSONL entry per `aca` invocation with token totals (input + completion + total + cache hit/miss). |
 
-Three logs, three files, three switches. `verbose` is independent of `reasoningLog`: you can write reasoning to the file without echoing to the console, or vice versa.
-
-### Verbosity
-
-`verbose` (config) or `-v` / `--verbose` (CLI) controls **one thing**: whether agent reasoning is echoed to the console as it runs. It does not affect the general log level. To get a noisier general log, use `--log-level debug` (or set `logging.level` in config).
+Logs are file-only. None of these settings affect what's printed to the console — that's a separate concern handled by `verbose` (reasoning lines) and the CLI's normal output (the AWS CLI's stdout passthrough plus approval prompts). To watch operational logs live in a separate terminal: `tail -f ~/.local/state/aws-cli-agent/general.log`.
 
 ### `defaultRegion` and `--region`
 
@@ -152,7 +173,7 @@ When `provider = "bedrock"`, configure region and (optionally) profile via the n
 
 ### Prompt caching
 
-`aca` sends the same system prompt and tool definitions on every step of every invocation — roughly 5 KB of stable content. When `caching: true` (the default), this prefix is marked cacheable on providers that support it:
+`aca` sends the same system prompt on every step of every invocation — roughly 3,300 tokens of stable content. When `caching: true` (the default), this prefix is marked cacheable on providers that support it:
 
 | Provider | Caching behavior |
 |---|---|
@@ -165,15 +186,15 @@ The token counts written to `usage.log` include cache hit/miss accounting where 
 
 ```json
 {
-  "promptTokens": 4821,
-  "completionTokens": 142,
-  "totalTokens": 4963,
-  "cacheReadTokens": 4500,
+  "promptTokens": 7914,
+  "completionTokens": 188,
+  "totalTokens": 8102,
+  "cacheReadTokens": 3305,
   "cacheWriteTokens": 0
 }
 ```
 
-A typical multi-step run after the cache is warm: the first step writes the cache (~5 KB), subsequent steps within the same run read it (4,500 read tokens each). The next `aca` invocation within ~5 minutes also reads from the cache. Cost reduction in practice: roughly 60% off the input bill for users who invoke `aca` frequently.
+Only the system prompt is cached. Tool definitions are part of the request body the provider re-tokenizes on every call — the AI SDK doesn't propagate tool-level cache markers in the Bedrock provider, so we can't extend the cache prefix that far in this version. The realistic cost reduction is therefore around 25-40% of the input token bill on warm-cache runs (the system prompt is ~3,300 of the ~7,000-9,000 input tokens a typical run sends).
 
 Disable with `caching: false` if you run `aca` rarely (once an hour or less), since first-call cache writes cost slightly more than uncached prompts.
 
@@ -188,7 +209,7 @@ What would you like to do with this script?
   Cancel
 ```
 
-- **Execute** — write to temp, run, audit, delete (unchanged from earlier behavior).
+- **Execute** — write to temp, run, audit, delete.
 - **Save** — write to `scriptFolder` (default `$XDG_DATA_HOME/aws-cli-agent/scripts`) with mode 0700. The full path is shown both in the prompt and in stdout after the run.
 - **Cancel** — nothing executed, nothing saved.
 
@@ -201,10 +222,14 @@ aca [options] [request...]
 
 Options:
   -v, --verbose            echo agent reasoning to the console as it runs
-  --log-level <level>      override logging.level for this run
+  --log-level <level>      override logging.level for this run:
+                           silent | error | warn | info | debug | trace
   --auto-approve           auto-approve all commands and scripts (dangerous)
   --profile <name>         hint the agent to use this AWS profile
   --region <name>          override defaultRegion for this run
+  -i, --interactive        force AWS CLI commands to inherit your terminal
+                           (for shells, port-forwards, log tails — common
+                           patterns auto-detect; this is the manual override)
 
 Commands:
   run <request...>         (default) execute a natural-language request
@@ -269,11 +294,79 @@ Run `aca paths` to see the actual resolved locations on your system.
 
 ## Architecture
 
-- **Agent loop**: Vercel AI SDK `generateText` with multi-step tool calling, hard-capped by `maxSteps`. Every step is funneled through `onStepFinish`.
-- **Stateless remote**: each call sends the full conversation; no provider-side state is kept.
-- **Local-only state**: history, logs, config — all under XDG paths.
-- **Tools as the safety boundary**: tools are the only way the agent can affect the world; mutating tools prompt the user by default.
-- **stdout is reserved for AWS CLI output** — pipe `aca ... | jq` exactly like you'd pipe `aws ... | jq`. All chrome (reasoning, prompts, status) goes to stderr.
+```
+   your machine
+   ┌────────────────────────────────────────────────────────┐
+   │                                                        │
+   │   you type a request in the terminal                   │
+   │                       │                                │
+   │                       ▼                                │
+   │            ┌──────────────────────┐                    │
+   │            │  agent loop          │                    │
+   │            │  (Vercel AI SDK,     │                    │
+   │            │   streamText)        │                    │
+   │            └──────────┬───────────┘                    │
+   │                       │                                │
+   │           selects a tool to call:                      │
+   │             - query_history                            │
+   │             - list_aws_profiles                        │
+   │             - prompt_user / prompt_user_multi          │
+   │             - execute_aws_command                      │
+   │             - execute_bash_script                      │
+   │                       │                                │
+   │                       ▼                                │
+   │            ┌──────────────────────┐                    │
+   │            │  approval gate       │                    │
+   │            │  (skipped if         │                    │
+   │            │   auto-approved or   │                    │
+   │            │   read-only tool)    │                    │
+   │            └──────────┬───────────┘                    │
+   │                       │ y                              │
+   │                       ▼                                │
+   │            ┌──────────────────────┐                    │
+   │            │  aws CLI subprocess  │ ◀── credentials    │
+   │            │                      │     from ~/.aws    │
+   │            └──────────┬───────────┘     (profiles,     │
+   │                       │                  SSO cache)    │
+   │                       ▼                                │
+   │            stdout printed verbatim to terminal         │
+   │                                                        │
+   │                                                        │
+   │   state on disk (XDG paths):                           │
+   │     config.json    history.jsonl                       │
+   │     general.log    audit.log                           │
+   │     reasoning.log  usage.log                           │
+   │     saved scripts/                                     │
+   │                                                        │
+   └─────────────────────┬──────────────────────────────────┘
+                         │
+              messages + tool definitions (HTTPS)
+                         │
+                         ▼
+   ┌────────────────────────────────────────────────────────┐
+   │  LLM provider                                          │
+   │    Anthropic · OpenAI · Google · Bedrock               │
+   │    prompt cache (~5 min TTL) — system prompt only      │
+   └────────────────────────────────────────────────────────┘
+```
+
+**The agent loop.** `aca` uses the Vercel AI SDK's `streamText` to run a multi-step reasoning loop, hard-capped by `maxSteps`. Each step: the model emits reasoning text (streamed live to the console when `verbose` is on), decides on a tool call, the host runs the tool (with approval if needed), and the result feeds back into the next step's prompt. The loop terminates when the model emits a final text response with no tool call, or when `maxSteps` is reached.
+
+**Stateless server-side, with one caveat.** Each call to the LLM provider includes the full conversation history — system prompt, tool definitions, original user request, every prior step's reasoning and tool results. The provider doesn't retain conversation state between calls. **One exception:** when prompt caching is enabled, the provider temporarily stores the cached prefix (the system prompt, ~3,300 tokens) for ~5 minutes so subsequent calls within that window can replay it cheaply. Nothing else is retained.
+
+**Local-only state.** Everything `aca` remembers is on your machine. History (`history.jsonl`), logs (`general.log`, `audit.log`, `reasoning.log`, `usage.log`), and config all live under XDG paths. Saved scripts go to `$XDG_DATA_HOME/aws-cli-agent/scripts/` by default. No remote backend, no telemetry.
+
+**Tools as the safety boundary.** The model can only affect the outside world through tools. Two of them — `execute_aws_command` and `execute_bash_script` — are the destructive paths. Both prompt for user approval by default; read-only AWS CLI commands may auto-approve depending on `autoApprove.readOnly`; bash scripts **always** prompt regardless of auto-approve settings.
+
+**stdout vs. stderr discipline.** `aca` reserves stdout exclusively for the AWS CLI's verbatim output. Everything `aca` itself emits — approval prompts, reasoning lines, agent narrative, error summaries, status footers — goes to stderr. The discipline means you can pipe `aca` like the underlying `aws` command:
+
+```bash
+aca "list buckets in my-staging" | jq -r '.[].Name'  # works
+aca "list ec2 instances" > instances.json            # works
+aca ... 2>/dev/null                                  # silence the agent's chrome
+```
+
+Without this rule, the approval prompts and reasoning lines would land in the next process's stdin and corrupt downstream tools. With it, the agent is invisible to pipelines — exactly as if you'd run the `aws` command directly.
 
 ## License
 
