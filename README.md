@@ -33,6 +33,12 @@ The first example is interactive — the agent runs a read-only `describe-instan
 - **Audit log is your friend.** Every executed command — including its stdout, stderr, and exit code — lands in `audit.log` (JSONL). If you ever need to reconstruct what happened, it's all there. Don't disable `logging.auditLog` unless you have a specific reason.
 - **No warranty.** **You use this agent at your own risk.** The authors are not responsible for unintended AWS API calls, deleted resources, exceeded budgets, or any other damage caused by using this tool. If you wouldn't run `aws` commands blindly from a script you found in someone's gist, don't run `aca` blindly either.
 
+## Trademark & affiliation
+
+`aws-cli-agent` (`aca`) is an independent project, not affiliated with or
+endorsed by Amazon Web Services. "AWS" and "Amazon Web Services" are
+trademarks of Amazon.com, Inc.
+
 ## Installation
 
 ```bash

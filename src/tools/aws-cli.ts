@@ -5,6 +5,7 @@ import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
+import { FATAL_AWS_EXIT_CODES, FatalAwsCliError, UserCancelledError, wrapPrompt } from '../errors.js';
 
 const READ_ONLY_VERBS = [
   /^describe-/,
@@ -198,7 +199,9 @@ export function awsCliTool(opts: {
             `${chalk.bold('  Mode:    ')}${chalk.yellow('interactive')} (your terminal will be connected to the command)\n`,
           );
         }
-        const ok = await confirm({ message: 'Execute this command?', default: true });
+        const ok = await wrapPrompt(
+          confirm({ message: 'Execute this command?', default: true }),
+        );
         if (!ok) {
           opts.logger.warn('User declined command');
           // Record the declined call so the agent's end-of-run logic sees
@@ -242,9 +245,19 @@ export function awsCliTool(opts: {
             opts.logger.warn(`AWS CLI failed (exit ${code})`);
             opts.logger.trace('stderr', stderr);
           }
-        } else if (code !== 0) {
+        } else if (code !== 0 && code !== 130) {
+          // Exit 130 in interactive mode = user pressed Ctrl-C to end their
+          // SSM session, shell, port-forward, etc. That's expected, not a
+          // failure. Anything else is genuine — log it.
           opts.logger.warn(`Interactive AWS CLI exited non-zero (${code})`);
         }
+
+        // SSM sessions and other interactive AWS CLI commands return 130
+        // when the user Ctrl-Cs to end the session. That's the normal way
+        // to leave a shell — treat it as success for ok/exit purposes so we
+        // don't surface it as an error in cli.ts. The real exit code is
+        // still recorded in the audit log for accuracy.
+        const effectivelyOk = code === 0 || (useInteractive && code === 130);
 
         // Audit captures whatever we have. For interactive runs stdout/stderr
         // are empty — that's accurate, the bytes went to the terminal — and
@@ -254,7 +267,7 @@ export function awsCliTool(opts: {
           cmd: display,
           profile,
           exitCode: code,
-          ok: code === 0,
+          ok: effectivelyOk,
           stdout: useInteractive ? '[interactive session — output not captured]' : stdout,
           stderr: useInteractive ? '' : stderr,
         });
@@ -269,18 +282,33 @@ export function awsCliTool(opts: {
             : stdout,
           stderr: useInteractive ? '' : stderr,
           exitCode: code,
-          ok: code === 0,
+          ok: effectivelyOk,
         });
 
         // For the agent's context, return a clear signal that interactive
         // mode ran so it doesn't try to parse fictional stdout.
         if (useInteractive) {
           return {
-            ok: code === 0,
+            ok: effectivelyOk,
             exitCode: code,
             interactive: true,
             note: 'Interactive session ran. Output went directly to the user\'s terminal and was not captured. Do not summarize or describe its contents.',
           };
+        }
+        // Classify failures. Fatal exit codes (252-255) indicate the call
+        // won't succeed without external intervention — bad credentials,
+        // missing resource, malformed request, AWS service failure. We
+        // throw FatalAwsCliError (after recording the audit trail above)
+        // rather than returning a result to the model: the throw unwinds
+        // the agent loop entirely, the user sees the AWS stderr in red,
+        // and we exit 1. The model never gets a chance to retry, because
+        // these classes of error don't get better with retries.
+        //
+        // Soft failures (other non-zero exits) ARE returned to the model
+        // as ordinary results. The model may retry with a different
+        // approach. maxSteps bounds the worst case if that goes nowhere.
+        if (code !== 0 && FATAL_AWS_EXIT_CODES.has(code)) {
+          throw new FatalAwsCliError(display, code, stderr);
         }
         return {
           ok: code === 0,
@@ -289,6 +317,10 @@ export function awsCliTool(opts: {
           stderr: truncate(stderr),
         };
       } catch (err) {
+        // FatalAwsCliError is our own signal — propagate it cleanly.
+        // UserCancelledError must propagate too (Ctrl-C at the approval
+        // prompt) or it'd get swallowed into a spawn-failure log entry.
+        if (err instanceof FatalAwsCliError || err instanceof UserCancelledError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         opts.logger.error('Failed to spawn aws CLI', msg);
         opts.audit.logCommand({

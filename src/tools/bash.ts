@@ -9,6 +9,7 @@ import chalk from 'chalk';
 import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
 import { DEFAULT_SCRIPT_FOLDER } from '../paths.js';
+import { wrapPrompt } from '../errors.js';
 
 function runProcess(
   cmd: string,
@@ -93,15 +94,17 @@ export function bashScriptTool(opts: {
       // — auto-approving them would defeat a primary safety boundary. The
       // autoApprove flag remains in effect for individual aws CLI commands
       // (where read-only is a meaningful and enforceable category).
-      const action = await select<'execute' | 'save' | 'cancel'>({
-        message: 'What would you like to do with this script?',
-        choices: [
-          { value: 'execute', name: 'Execute now' },
-          { value: 'save', name: `Save to disk (${savePath})` },
-          { value: 'cancel', name: 'Cancel' },
-        ],
-        default: 'execute',
-      });
+      const action = await wrapPrompt(
+        select<'execute' | 'save' | 'cancel'>({
+          message: 'What would you like to do with this script?',
+          choices: [
+            { value: 'execute', name: 'Execute now' },
+            { value: 'save', name: `Save to disk (${savePath})` },
+            { value: 'cancel', name: 'Cancel' },
+          ],
+          default: 'execute',
+        }),
+      );
 
       if (action === 'cancel') {
         opts.logger.warn('User cancelled script');

@@ -8,8 +8,9 @@ import { UsageLogger } from './usage.js';
 import { History } from './history.js';
 import { runAgent } from './agent.js';
 import { FILES, PATHS, DEFAULT_SCRIPT_FOLDER } from './paths.js';
+import { UserCancelledError } from './errors.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 type GlobalOptions = {
   /** Toggles reasoning-on-console only. Does NOT change general log level. */
@@ -190,7 +191,13 @@ export async function main(argv: string[]): Promise<void> {
         // Footer counts only commands that actually executed. Declined or
         // cancelled commands appear in `result.commands` for the history
         // log but don't count as "ran" since no subprocess was started.
-        if (result.executedCommandCount > 0) {
+        //
+        // Gated on `cfg.verbose`: the footer is supplementary information
+        // ("here's what happened during the run") that's useful while you're
+        // watching the agent work, but noisy for scripted/pipeline use. With
+        // verbose off, nothing aca generates reaches the terminal — only the
+        // AWS CLI's verbatim output does.
+        if (cfg.verbose && result.executedCommandCount > 0) {
           const tag = result.profile ? `[${result.profile}]` : '';
           const cmds =
             result.executedCommandCount === 1
@@ -199,10 +206,18 @@ export async function main(argv: string[]): Promise<void> {
           process.stderr.write(chalk.dim(`\nran ${cmds} ${tag}\n`));
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error('Agent failed', msg);
-        process.stderr.write(chalk.red('Error: ') + msg + '\n');
-        process.exitCode = 1;
+        // User cancelled (Ctrl-C at a prompt). Print a calm message,
+        // exit 130 (SIGINT convention), no red error, no "ran N" footer,
+        // no stack trace.
+        if (err instanceof UserCancelledError) {
+          process.stderr.write(chalk.dim('cancelled by user\n'));
+          process.exitCode = 130;
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.error('Agent failed', msg);
+          process.stderr.write(chalk.red('Error: ') + msg + '\n');
+          process.exitCode = 1;
+        }
       } finally {
         logger.close();
         audit.close();

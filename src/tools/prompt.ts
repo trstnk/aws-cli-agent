@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { confirm, input, password, select } from '@inquirer/prompts';
 import chalk from 'chalk';
 import type { Logger } from '../logger.js';
+import { wrapPrompt } from '../errors.js';
 
 /**
  * Schema for a single question. Used both by `prompt_user` directly (single
@@ -57,28 +58,30 @@ async function askOne(q: Question, logger: Logger): Promise<string> {
       if (!q.choices || q.choices.length === 0) {
         throw new Error('kind="choice" requires non-empty `choices`.');
       }
-      const answer = await select({
-        message: q.message,
-        choices: q.choices.map((c) => ({ value: c, name: c })),
-        default: q.defaultValue,
-      });
+      const answer = await wrapPrompt(
+        select({
+          message: q.message,
+          choices: q.choices.map((c) => ({ value: c, name: c })),
+          default: q.defaultValue,
+        }),
+      );
       return answer;
     }
     case 'confirm': {
       const def = (q.defaultValue ?? 'yes').toLowerCase().startsWith('y');
-      const answer = await confirm({ message: q.message, default: def });
+      const answer = await wrapPrompt(confirm({ message: q.message, default: def }));
       return answer ? 'yes' : 'no';
     }
     case 'secret': {
       // Inquirer's password prompt masks input. Used for short secrets like
       // MFA codes; long-lived AWS credentials should always come from the
       // user's profile, not be typed here.
-      const answer = await password({ message: q.message, mask: '*' });
+      const answer = await wrapPrompt(password({ message: q.message, mask: '*' }));
       return answer;
     }
     case 'text':
     default: {
-      const answer = await input({ message: q.message, default: q.defaultValue });
+      const answer = await wrapPrompt(input({ message: q.message, default: q.defaultValue }));
       return answer;
     }
   }

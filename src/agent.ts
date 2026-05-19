@@ -7,6 +7,7 @@ import type { ReasoningLogger } from './reasoning.js';
 import type { UsageLogger } from './usage.js';
 import { createModel } from './providers.js';
 import { createTools } from './tools/index.js';
+import { FatalAwsCliError, UserCancelledError } from './errors.js';
 
 const SYSTEM_PROMPT = `You are aws-cli-agent (aca), an agentic assistant that translates natural-language requests into AWS CLI commands and executes them locally on the user's machine.
 
@@ -44,7 +45,8 @@ Operating rules:
 8. Interactive commands: some AWS CLI commands require a real terminal — SSM Session Manager shells (\`ssm start-session\`), port-forwarding sessions (the same command with --document-name AWS-StartPortForwardingSession*), ECS Exec (\`ecs execute-command\`), log tails with --follow. For these, set \`interactive: true\` on the execute_aws_command call. The host will connect the user's terminal directly to the command and you will receive no stdout — DO NOT try to summarize or describe the output afterwards, since you can't see it. Common patterns auto-detect, but setting the flag explicitly is safer.
 9. The final action of a successful run MUST be either execute_aws_command (the user-requested action) or execute_bash_script. If the user cancels via prompt_user, stop gracefully and explain in one sentence.
 10. NEVER include credentials, API keys, secrets, or session tokens in commands or scripts. AWS credentials come from the user's existing profile.
-11. Keep your reasoning concise — one or two sentences per step. DO NOT summarize, restate, reformat, or describe the output of the AWS CLI. The CLI's stdout is shown to the user directly by the host program. Your only post-execution job is to stop. If anything went wrong, say so briefly; if it succeeded, you may stop without further commentary.`;
+11. Handling AWS CLI errors: if execute_aws_command returns a result with \`ok: false\` (and a non-zero exitCode), you may retry ONCE with a different approach if it's clearly worth trying — wrong region, wrong profile, missing flag, fixable typo. Don't loop trying minor variations. The host caps total run length via maxSteps; respect it. Note: unrecoverable errors (auth failure, missing credentials, permission denied, malformed request, AWS service errors) terminate the run before you'd see them, so you don't need to handle those cases — they're handled for you.
+12. Keep your reasoning concise — one or two sentences per step. DO NOT summarize, restate, reformat, or describe the output of the AWS CLI. The CLI's stdout is shown to the user directly by the host program. Your only post-execution job is to stop. If anything went wrong, say so briefly; if it succeeded, you may stop without further commentary.`;
 
 export type RunResult = {
   /** Model's free-form text. Useful only for the "no command ran" error path. */
@@ -70,6 +72,18 @@ export type RunResult = {
   finalError: string | null;
   /** Did the last execute_* call run successfully? */
   ranCommand: boolean;
+  /**
+   * How the run ended. cli.ts uses this to pick the exit code and decide
+   * whether to print the AWS stderr as a red error:
+   *   - 'completed'  — normal end, model stopped on its own (exit 0)
+   *   - 'cancelled'  — Ctrl-C at a prompt; cli.ts prints "cancelled by
+   *                    user" on stderr and exits 130 (the canonical SIGINT
+   *                    exit code)
+   *   - 'fatal'      — AWS CLI returned an unrecoverable exit code
+   *                    (252-255); finalError carries the stderr, cli.ts
+   *                    prints it in red and exits 1
+   */
+  endReason: 'completed' | 'cancelled' | 'fatal';
 };
 
 export async function runAgent(opts: {
@@ -202,62 +216,157 @@ export async function runAgent(opts: {
   //   1. text-end (here) → reasoning text line
   //   2. onToolCallStart (callback above) → tool: line, then execute()
 
-  for await (const part of result.fullStream) {
-    switch (part.type) {
-      case 'start-step': {
-        stepCounter += 1;
-        toolCallStepNumber = stepCounter; // visible to onToolCallStart
-        currentReasoning = '';
-        currentToolCalls = [];
-        reasoningEchoed = false;
-        break;
-      }
-      case 'text-delta': {
-        currentReasoning += part.text;
-        break;
-      }
-      case 'text-end': {
-        if (!reasoningEchoed) {
-          reasoning.echoReasoning(stepCounter, currentReasoning);
-          reasoningEchoed = true;
+  // Terminal state for the run. The for-await loop transitions us out of
+  // 'completed' (the default) into 'cancelled' on Ctrl-C, or 'fatal' on
+  // an unrecoverable AWS CLI failure. cli.ts uses endReason to pick the
+  // exit code and the user-facing message.
+  let endReason: 'completed' | 'cancelled' | 'fatal' = 'completed';
+
+  try {
+    for await (const part of result.fullStream) {
+      switch (part.type) {
+        case 'start-step': {
+          stepCounter += 1;
+          toolCallStepNumber = stepCounter; // visible to onToolCallStart
+          currentReasoning = '';
+          currentToolCalls = [];
+          reasoningEchoed = false;
+          break;
         }
-        break;
-      }
-      case 'tool-call': {
-        // Backup echo path: if text-end didn't fire (provider variant or
-        // text-less step), echo whatever reasoning we have when we see
-        // tool-call. The tool-call LINE itself is NOT printed here — it's
-        // printed by experimental_onToolCallStart, which fires
-        // synchronously before execute() and guarantees ordering above
-        // any approval prompt.
-        if (!reasoningEchoed) {
-          reasoning.echoReasoning(stepCounter, currentReasoning);
-          reasoningEchoed = true;
+        case 'text-delta': {
+          currentReasoning += part.text;
+          break;
         }
-        break;
+        case 'text-end': {
+          if (!reasoningEchoed) {
+            reasoning.echoReasoning(stepCounter, currentReasoning);
+            reasoningEchoed = true;
+          }
+          break;
+        }
+        case 'tool-call': {
+          // Backup echo path: if text-end didn't fire (provider variant or
+          // text-less step), echo whatever reasoning we have when we see
+          // tool-call. The tool-call LINE itself is NOT printed here — it's
+          // printed by experimental_onToolCallStart, which fires
+          // synchronously before execute() and guarantees ordering above
+          // any approval prompt.
+          if (!reasoningEchoed) {
+            reasoning.echoReasoning(stepCounter, currentReasoning);
+            reasoningEchoed = true;
+          }
+          break;
+        }
+        case 'tool-error': {
+          // The SDK catches errors thrown from tool.execute() and emits
+          // them as tool-error events instead of rejecting the stream. So
+          // we inspect every tool-error for our sentinels:
+          //
+          //   - UserCancelledError → throw out of the loop so the outer
+          //     catch propagates it to cli.ts for "cancelled by user" + exit 130.
+          //   - FatalAwsCliError → set endReason='fatal' and stop iterating.
+          //     The failed call has already been recorded in executions[]
+          //     by the tool (audit + record fire before the throw), so
+          //     finalError further down will pick up the stderr naturally.
+          //   - Anything else: ignore. Soft failures shouldn't be thrown
+          //     (tools return them as results), and any other thrown error
+          //     is treated as a tool-level failure the model can decide
+          //     how to handle.
+          if (part.error instanceof UserCancelledError) {
+            throw part.error;
+          }
+          if (part.error instanceof FatalAwsCliError) {
+            endReason = 'fatal';
+            logger.warn(`Run ended on fatal AWS CLI error (exit ${part.error.exitCode}).`);
+            // Flush this step's reasoning to the file log; the tool-call
+            // event for this step already fired, so currentToolCalls is
+            // populated. We need to break out cleanly without waiting
+            // for finish-step (the SDK may still emit it, may not).
+            reasoning.logStepToFile({
+              step: stepCounter,
+              reasoning: currentReasoning,
+              toolCalls: currentToolCalls,
+              finishReason: 'fatal-error',
+            });
+            // Stop processing the stream. We don't break out of the
+            // for-await directly because we want to drain remaining events
+            // for the SDK's internal cleanup; but we set a flag so we
+            // don't process them.
+            // Simplest: just let the loop continue. finish-step / finish
+            // events will pass through harmlessly.
+          }
+          break;
+        }
+        case 'finish-step': {
+          // After a fatal tool-error, finish-step still arrives for the
+          // same step. The reasoning was already flushed in the tool-error
+          // handler — don't double-flush. For normal steps, this is the
+          // path that flushes.
+          if (endReason !== 'fatal') {
+            reasoning.logStepToFile({
+              step: stepCounter,
+              reasoning: currentReasoning,
+              toolCalls: currentToolCalls,
+              finishReason: part.finishReason,
+            });
+          }
+          logger.debug(`Step ${stepCounter} finished (finishReason=${part.finishReason})`);
+          break;
+        }
+        // Other event types (reasoning-delta for thinking-models,
+        // tool-input-delta, source, file, raw, etc.) are ignored —
+        // fullStream is forward-compatible.
       }
-      case 'finish-step': {
+    }
+  } catch (err) {
+    // The for-await loop throws when we re-throw UserCancelledError above.
+    // It can also throw on genuine SDK / provider failures. We distinguish:
+    if (err instanceof UserCancelledError) {
+      // No endReason='cancelled' assignment here: we throw immediately
+      // and the post-stream code in this function never runs. cli.ts is
+      // the one that recognizes UserCancelledError and exits 130 — it
+      // doesn't need RunResult.endReason for that.
+      if (currentReasoning.trim().length > 0 || currentToolCalls.length > 0) {
         reasoning.logStepToFile({
           step: stepCounter,
           reasoning: currentReasoning,
           toolCalls: currentToolCalls,
-          finishReason: part.finishReason,
+          finishReason: 'cancelled',
         });
-        logger.debug(`Step ${stepCounter} finished (finishReason=${part.finishReason})`);
-        break;
       }
-      // Other event types (reasoning-delta for thinking-models,
-      // tool-input-delta, source, file, raw, etc.) are ignored —
-      // fullStream is forward-compatible.
+      logger.info('Run cancelled by user.');
+      throw err;
     }
+    // Genuine bug or provider failure. Let it bubble.
+    throw err;
   }
 
-  // Wait for all the post-stream promises to resolve. They're already
-  // ready by the time fullStream finishes (the stream completion is the
-  // signal), so these awaits are effectively synchronous.
-  const finalText = await result.text;
-  const finalSteps = await result.steps;
-  const totalUsage = await result.totalUsage;
+  // After the stream completes (normally OR via FatalAwsCliError), pull
+  // the post-stream promises. Most runs reach here with all three already
+  // resolved (the stream completion is the signal). But when we caught a
+  // FatalAwsCliError mid-stream, the SDK may have left these in a rejected
+  // state — the stream didn't naturally complete. Defensive try/await
+  // around each so we degrade gracefully: a partial RunResult with
+  // whatever usage we got from steps that did complete is better than
+  // crashing on a downstream `await` and losing the failure context.
+  let finalText = '';
+  let finalSteps: Awaited<typeof result.steps> = [];
+  let totalUsage: Awaited<typeof result.totalUsage> | undefined;
+  try {
+    finalText = await result.text;
+  } catch (err) {
+    logger.debug('result.text rejected (expected after fatal/cancel)', err);
+  }
+  try {
+    finalSteps = await result.steps;
+  } catch (err) {
+    logger.debug('result.steps rejected (expected after fatal/cancel)', err);
+  }
+  try {
+    totalUsage = await result.totalUsage;
+  } catch (err) {
+    logger.debug('result.totalUsage rejected (expected after fatal/cancel)', err);
+  }
 
   logger.info(`Agent finished after ${finalSteps.length} step(s)`);
   logger.debug('Final text', finalText);
@@ -346,6 +455,7 @@ export async function runAgent(opts: {
     finalOutput,
     finalError,
     ranCommand,
+    endReason,
   };
 }
 
