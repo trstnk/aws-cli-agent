@@ -58,30 +58,42 @@ async function askOne(q: Question, logger: Logger): Promise<string> {
       if (!q.choices || q.choices.length === 0) {
         throw new Error('kind="choice" requires non-empty `choices`.');
       }
-      const answer = await wrapPrompt(
-        select({
-          message: q.message,
-          choices: q.choices.map((c) => ({ value: c, name: c })),
-          default: q.defaultValue,
-        }),
+      // Capture narrowed value: TS loses the q.choices !== undefined
+      // narrowing across the closure boundary below.
+      const choices = q.choices;
+      const answer = await wrapPrompt((ctx) =>
+        select(
+          {
+            message: q.message,
+            choices: choices.map((c) => ({ value: c, name: c })),
+            default: q.defaultValue,
+          },
+          ctx,
+        ),
       );
       return answer;
     }
     case 'confirm': {
       const def = (q.defaultValue ?? 'yes').toLowerCase().startsWith('y');
-      const answer = await wrapPrompt(confirm({ message: q.message, default: def }));
+      const answer = await wrapPrompt((ctx) =>
+        confirm({ message: q.message, default: def }, ctx),
+      );
       return answer ? 'yes' : 'no';
     }
     case 'secret': {
       // Inquirer's password prompt masks input. Used for short secrets like
       // MFA codes; long-lived AWS credentials should always come from the
       // user's profile, not be typed here.
-      const answer = await wrapPrompt(password({ message: q.message, mask: '*' }));
+      const answer = await wrapPrompt((ctx) =>
+        password({ message: q.message, mask: '*' }, ctx),
+      );
       return answer;
     }
     case 'text':
     default: {
-      const answer = await wrapPrompt(input({ message: q.message, default: q.defaultValue }));
+      const answer = await wrapPrompt((ctx) =>
+        input({ message: q.message, default: q.defaultValue }, ctx),
+      );
       return answer;
     }
   }

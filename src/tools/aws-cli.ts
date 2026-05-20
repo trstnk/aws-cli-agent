@@ -199,8 +199,8 @@ export function awsCliTool(opts: {
             `${chalk.bold('  Mode:    ')}${chalk.yellow('interactive')} (your terminal will be connected to the command)\n`,
           );
         }
-        const ok = await wrapPrompt(
-          confirm({ message: 'Execute this command?', default: true }),
+        const ok = await wrapPrompt((ctx) =>
+          confirm({ message: 'Execute this command?', default: true }, ctx),
         );
         if (!ok) {
           opts.logger.warn('User declined command');

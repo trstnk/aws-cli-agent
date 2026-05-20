@@ -94,16 +94,19 @@ export function bashScriptTool(opts: {
       // — auto-approving them would defeat a primary safety boundary. The
       // autoApprove flag remains in effect for individual aws CLI commands
       // (where read-only is a meaningful and enforceable category).
-      const action = await wrapPrompt(
-        select<'execute' | 'save' | 'cancel'>({
-          message: 'What would you like to do with this script?',
-          choices: [
-            { value: 'execute', name: 'Execute now' },
-            { value: 'save', name: `Save to disk (${savePath})` },
-            { value: 'cancel', name: 'Cancel' },
-          ],
-          default: 'execute',
-        }),
+      const action = await wrapPrompt((ctx) =>
+        select<'execute' | 'save' | 'cancel'>(
+          {
+            message: 'What would you like to do with this script?',
+            choices: [
+              { value: 'execute', name: 'Execute now' },
+              { value: 'save', name: `Save to disk (${savePath})` },
+              { value: 'cancel', name: 'Cancel' },
+            ],
+            default: 'execute',
+          },
+          ctx,
+        ),
       );
 
       if (action === 'cancel') {

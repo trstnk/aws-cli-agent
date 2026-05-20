@@ -59,16 +59,38 @@ export class FatalAwsCliError extends Error {
 export const FATAL_AWS_EXIT_CODES = new Set([252, 253, 254, 255]);
 
 /**
- * Wrap an Inquirer prompt promise so that Ctrl-C (which Inquirer reports
- * as `ExitPromptError`) becomes our `UserCancelledError` sentinel. The
- * Inquirer error class isn't easily importable, so we detect by `.name`.
- * Re-throws any other error unchanged.
+ * Wrap an Inquirer prompt call so that:
  *
- *   const answer = await wrapPrompt(confirm({ message: '...' }));
+ *   1. The prompt's question text renders on stderr, not stdout. Critical
+ *      for `aca "..." > file.txt` — without this, the prompt would be
+ *      silently swallowed into the redirected file while the user stared
+ *      at a frozen terminal waiting for an invisible question.
+ *
+ *   2. Ctrl-C (which Inquirer reports as `ExitPromptError`) becomes our
+ *      `UserCancelledError` sentinel. The Inquirer error class isn't
+ *      easily importable, so we detect by `.name`.
+ *
+ * The `output` option lives on Inquirer's `context` parameter (the second
+ * positional argument), NOT on the config object. Spreading it into the
+ * config silently does nothing — TypeScript accepts the extra property,
+ * but at runtime Inquirer ignores it. Pass the prompt as a thunk so we
+ * can inject the context at the call site:
+ *
+ *   const ok = await wrapPrompt((ctx) =>
+ *     confirm({ message: 'Execute?', default: true }, ctx),
+ *   );
+ *
+ * The thunk pattern is slightly more verbose than `wrapPrompt(confirm(...))`
+ * was, but it's the only shape that lets us centralize the context
+ * injection. Forgetting to pass `ctx` through to the Inquirer call is
+ * impossible to do silently — TypeScript will infer ctx's type and lint
+ * unused parameters.
  */
-export async function wrapPrompt<T>(p: Promise<T>): Promise<T> {
+export async function wrapPrompt<T>(
+  factory: (ctx: { output: NodeJS.WritableStream }) => Promise<T>,
+): Promise<T> {
   try {
-    return await p;
+    return await factory({ output: process.stderr });
   } catch (err) {
     if (err instanceof Error && err.name === 'ExitPromptError') {
       throw new UserCancelledError();
