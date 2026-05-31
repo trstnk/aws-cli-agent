@@ -7,7 +7,15 @@ import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
 import { FATAL_AWS_EXIT_CODES, FatalAwsCliError, UserCancelledError, wrapPrompt } from '../errors.js';
 
-const READ_ONLY_VERBS = [
+/**
+ * Read-only verb patterns. Used both to decide whether an AWS CLI call may
+ * auto-approve, and (since 0.7.0) to syntax-highlight bash scripts in the
+ * approval display — read-only verbs render in light blue, mutating in yellow.
+ *
+ * Exported so bash.ts can apply the same classification consistently. If
+ * you add a verb here, the highlighter picks it up automatically.
+ */
+export const READ_ONLY_VERBS = [
   /^describe-/,
   /^list-/,
   /^get-/,
@@ -19,7 +27,12 @@ const READ_ONLY_VERBS = [
   /^query$/,
 ];
 
-const READ_ONLY_FULL = [
+/**
+ * Full-command patterns that are read-only but don't match a verb prefix
+ * (e.g. `s3 ls`, `sts get-caller-identity` where the resource type isn't a
+ * standard verb). Same usage as READ_ONLY_VERBS.
+ */
+export const READ_ONLY_FULL = [
   /^s3\s+ls(\s|$)/,
 ];
 

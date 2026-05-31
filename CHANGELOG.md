@@ -4,6 +4,19 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.6.1] - 2026-05-31
+
+### Added
+
+- **AWS commands are highlighted in the bash script approval preview.** When the agent generates a script for execution, AWS CLI invocations now stand out from the rest of the script body with inverse-color "highlighter strips" so the mutating calls are easy to spot in a long script:
+  - Read-only AWS calls (`describe-*`, `list-*`, `get-*`, `s3 ls`, `sts get-caller-identity`, etc.) render as a **blue strip**.
+  - Mutating AWS calls (`delete-*`, `terminate-*`, `create-*`, `put-*`, `s3 rm`, `s3 cp`, etc.) render as a **yellow strip**.
+  - Everything else — shell control flow, comments, args, flags, pipelines — stays in the existing green script body color.
+
+  Detection is pattern-based, not a full shell parser: `aws <service> <verb>` is matched wherever it appears in a line (start of line, after a pipe, after `time` or `env VAR=val`, inside a `$(...)` substitution). Read-only vs. mutating classification uses the same `READ_ONLY_VERBS` / `READ_ONLY_FULL` lists that drive the per-command auto-approve decision — single source of truth, no drift between the two features. Adding a verb to either list affects both behaviors.
+
+  False positives (e.g. an `aws ec2 describe-instances` substring inside an `echo "..."` literal) get highlighted too. Accepted limitation: a real shell tokenizer would catch these, but the surrounding `echo` and quotes make them visually distinguishable in context.
+
 ## [0.6.0] - 2026-05-31
 
 ### Breaking
@@ -55,7 +68,6 @@ versioning follows [SemVer](https://semver.org/).
 
 - **Ctrl-C inside an SSM session no longer prints "Cannot perform start session: read /dev/stdin: input/output error".** Previously, Ctrl-C delivered SIGINT to both the AWS CLI subprocess AND aca; aca's process tore down the shared stdin before the AWS CLI's own cleanup completed, producing the I/O-error message. The fix: `aca` installs a no-op SIGINT handler for the lifetime of any interactive AWS CLI subprocess, leaving the signal exclusively to the child. The AWS CLI now performs its normal clean shutdown and exits with code 0 or 130, which aca recognizes as a clean termination.
 
-## [0.5.0] - 2026-05-19
 ### Added
 
 - **Graceful error handling for AWS CLI failures.** AWS CLI exit codes
@@ -84,8 +96,6 @@ versioning follows [SemVer](https://semver.org/).
   on every multi-command run; now requires `--verbose` / `-v` to surface.
   With verbose off, nothing aca generates reaches the terminal — only
   the AWS CLI's verbatim output does, matching the README's promise.
-
-## [0.4.0] - 2026-05-18
 
 ### Changed
 

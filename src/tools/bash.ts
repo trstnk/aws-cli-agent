@@ -10,6 +10,7 @@ import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
 import { DEFAULT_SCRIPT_FOLDER } from '../paths.js';
 import { wrapPrompt } from '../errors.js';
+import { READ_ONLY_FULL, READ_ONLY_VERBS } from './aws-cli.js';
 
 function runProcess(
   cmd: string,
@@ -38,6 +39,113 @@ function indent(s: string, prefix: string): string {
   return s
     .split('\n')
     .map((l) => prefix + l)
+    .join('\n');
+}
+
+/**
+ * Match an `aws <service> <verb> ...` invocation anywhere within a line.
+ * The lookbehind is intentionally permissive — it matches `aws` at the
+ * start of the line, after a pipe (`| aws ...`), after `time aws ...`,
+ * after `env VAR=val aws ...`, etc. We don't try to be a full shell
+ * parser: that's overkill for a syntax-highlight feature. False positives
+ * (e.g. the literal string `"use aws ec2 ..."` inside an echo) get
+ * highlighted too, but that's preferable to false negatives — and the
+ * surrounding context usually makes them visually distinguishable.
+ *
+ * Captures three groups: service (group 1), verb (group 2), and the rest
+ * of the args up to end of line or a shell metacharacter that ends a
+ * command (group 3). We stop the arg span at `|`, `;`, `&`, `)`, and `>` /
+ * `<` redirections so we don't highlight half of the next pipeline stage.
+ */
+const AWS_CALL_RE =
+  /\baws\s+([a-z][a-z0-9-]*)\s+([a-z][a-z0-9-]*)((?:\s+[^|;&)<>\n]*)?)/g;
+
+/**
+ * Decide whether an `aws <service> <verb>` invocation is read-only. Uses
+ * the same classification as the per-command auto-approve path so the
+ * highlighting matches the runtime behavior: if the highlight is light
+ * blue, the command would auto-approve with `autoApprove.readOnly: true`
+ * if it were a standalone tool call.
+ */
+function isAwsCallReadOnly(service: string, verb: string, restOfArgs: string): boolean {
+  // READ_ONLY_FULL patterns match against `service verb [args...]`.
+  // We pass the same shape to mirror runtime behavior.
+  const full = `${service} ${verb}${restOfArgs}`;
+  if (READ_ONLY_FULL.some((re) => re.test(full))) return true;
+  if (READ_ONLY_VERBS.some((re) => re.test(verb))) return true;
+  return false;
+}
+
+/**
+ * Color the AWS CLI invocations inside a script. Read-only calls
+ * (describe-, list-, get-, etc.) render in light blue; mutating calls
+ * (delete-, terminate-, create-, etc.) render in yellow. Non-AWS portions
+ * of each line stay in the script body's default green wrap.
+ *
+ * Implementation note: chalk colors don't nest the way you'd hope. If we
+ * wrapped the whole script in `chalk.green()` and then embedded blue/yellow
+ * spans inside it, the inner spans' closing reset (\u001b[39m) would
+ * disable the green for the remainder of the string. To avoid that, we
+ * render each line piece by piece, explicitly re-applying green to the
+ * non-highlighted spans.
+ */
+function highlightAwsCalls(script: string): string {
+  return script
+    .split('\n')
+    .map((line) => {
+      // Walk the line in pieces, emitting green for plain text and a
+      // distinct color for each AWS invocation. We use the regex's
+      // exec-loop position tracking to splice the line.
+      AWS_CALL_RE.lastIndex = 0;
+      let out = '';
+      let cursor = 0;
+      let m: RegExpExecArray | null;
+      while ((m = AWS_CALL_RE.exec(line)) !== null) {
+        // The `aws` keyword itself isn't in the capture groups — find it
+        // by scanning backward from the service position.
+        const matchStart = m.index;
+        const service = m[1];
+        const verb = m[2];
+        const restOfArgs = m[3] ?? '';
+        const readOnly = isAwsCallReadOnly(service, verb, restOfArgs);
+
+        // Pre-`aws` text (e.g. `| `, `time `, or empty for start-of-line)
+        // stays green.
+        if (matchStart > cursor) {
+          out += chalk.green(line.slice(cursor, matchStart));
+        }
+
+        // The `aws <service> <verb>` triple gets the distinct color.
+        // restOfArgs (the flags and values) stays green — flags are the
+        // boring part, the verb is what the user needs to verify.
+        // Inverse (swaps fg/bg) produces a "highlighter strip" look: the
+        // background takes the color and the text shows through in the
+        // terminal's default foreground. Much more visible against the
+        // green script body than colored text alone would be — the eye
+        // snaps to a block of color faster than to a colored word.
+        // Green strip for read-only (matches the safe/discovery feel of
+        // the surrounding green script body); red strip for mutating
+        // (the classic "stop and look" signal).
+        const highlight = readOnly
+          ? chalk.inverse.blueBright
+          : chalk.inverse.yellowBright;
+        out += highlight(`aws ${service} ${verb}`);
+        if (restOfArgs.length > 0) {
+          out += chalk.green(restOfArgs);
+        }
+        cursor = matchStart + m[0].length;
+      }
+      // Trailing text after the last match stays green.
+      if (cursor < line.length) {
+        out += chalk.green(line.slice(cursor));
+      }
+      // If no AWS call was found in the line, fall through with the whole
+      // line in green — same as the old uniform-green behavior.
+      if (out === '') {
+        out = chalk.green(line);
+      }
+      return out;
+    })
     .join('\n');
 }
 
@@ -81,7 +189,11 @@ export function bashScriptTool(opts: {
       process.stderr.write('\n');
       process.stderr.write(`${chalk.bold('  Reason: ')}${purpose}\n`);
       process.stderr.write(`${chalk.bold('  Script:')}\n`);
-      process.stderr.write(chalk.green(indent(script, '    ')) + '\n');
+      // Render the script with AWS calls highlighted. Read-only calls
+      // (describe-, list-, get-, etc.) render in light blue; mutating calls
+      // (delete-, terminate-, create-, etc.) render in yellow. Everything
+      // else stays green. See highlightAwsCalls for the parser caveats.
+      process.stderr.write(highlightAwsCalls(indent(script, '    ')) + '\n');
 
       // The save-to-disk option respects the configured folder, or falls back
       // to the XDG default. Compute the would-be path *before* prompting so
