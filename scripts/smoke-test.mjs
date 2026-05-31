@@ -102,6 +102,22 @@ async function main() {
       assert(parsed.logging.reasoningLog === false, 'reasoning log should default to false');
       assert(parsed.logging.usageLog === true, 'usage log should default to true');
       assert(parsed.caching === true, 'caching should default to true');
+      // 0.6.0+: the active provider's model lives under that provider's block.
+      assert(
+        parsed.anthropic && typeof parsed.anthropic.model === 'string',
+        'default config should include anthropic.model',
+      );
+      // 0.6.0+: top-level `model` is gone (moved into the per-provider block).
+      assert(
+        !('model' in parsed),
+        'default config should NOT have a top-level "model" key',
+      );
+      // File permissions should be 0600.
+      const mode = fs.statSync(configPath).mode & 0o777;
+      assert(
+        mode === 0o600,
+        `default config should be created with mode 0600, got ${mode.toString(8)}`,
+      );
     } finally {
       fs.rmSync(xdg, { recursive: true, force: true });
     }

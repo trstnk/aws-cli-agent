@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, writeDefaultConfig, type Config } from './config.js';
+import { loadConfig, validateActiveProvider, writeDefaultConfig, type Config } from './config.js';
 import { Logger, type LogLevel } from './logger.js';
 import { AuditLogger } from './audit.js';
 import { ReasoningLogger } from './reasoning.js';
@@ -10,7 +10,7 @@ import { runAgent } from './agent.js';
 import { FILES, PATHS, DEFAULT_SCRIPT_FOLDER } from './paths.js';
 import { UserCancelledError } from './errors.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 
 type GlobalOptions = {
   /** Toggles reasoning-on-console only. Does NOT change general log level. */
@@ -137,6 +137,18 @@ export async function main(argv: string[]): Promise<void> {
       }
 
       const cfg = applyCliOverrides(loadConfig(), globalOpts);
+      // Strict validation: the active provider must have a config block with
+      // a `model` set. Deferred from loadConfig so subcommands like `paths`
+      // and `history` work even without a config file. The run command is
+      // the one that actually needs a complete provider, so we check here.
+      try {
+        validateActiveProvider(cfg);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(chalk.red('Config error: ') + msg + '\n');
+        process.exitCode = 1;
+        return;
+      }
       const logger = new Logger(cfg.logging.level);
       const audit = new AuditLogger(cfg.logging.auditLog);
       const reasoning = new ReasoningLogger({

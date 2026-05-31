@@ -1,6 +1,7 @@
 import { streamText, stepCountIs } from 'ai';
 import type { Logger } from './logger.js';
 import type { Config } from './config.js';
+import { getActiveModel } from './config.js';
 import type { History, HistoryEntry } from './history.js';
 import type { AuditLogger } from './audit.js';
 import type { ReasoningLogger } from './reasoning.js';
@@ -119,9 +120,10 @@ export async function runAgent(opts: {
     config.caching && (config.provider === 'anthropic' || config.provider === 'bedrock');
 
   const tools = createTools({ logger, config, history, audit, record });
-  const model = createModel(config);
+  const model = createModel(config, logger);
+  const activeModel = getActiveModel(config);
 
-  logger.info(`Starting agent (provider=${config.provider}, model=${config.model})`);
+  logger.info(`Starting agent (provider=${config.provider}, model=${activeModel})`);
   logger.debug('User input', input);
   reasoning.beginRun(input);
 
@@ -399,7 +401,7 @@ export async function runAgent(opts: {
   usage.log({
     input,
     provider: config.provider,
-    model: config.model,
+    model: activeModel,
     steps: finalSteps.length,
     promptTokens: totalUsage?.inputTokens ?? 0,
     completionTokens: totalUsage?.outputTokens ?? 0,

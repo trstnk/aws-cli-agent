@@ -31,6 +31,7 @@ The first example is interactive — the agent runs a read-only `describe-instan
 - **Your prompts go to the model provider.** AWS CLI output is fed back to the model as part of subsequent steps. That means resource names, instance IDs, tag values, and any other data that appears in command output is transmitted to Anthropic / OpenAI / Google / Bedrock (depending on your provider choice). The provider does not retain this data beyond the request itself (and the cache TTL, ~5 minutes for cached prefixes), but **confirm this is compatible with the policies you have to respect** before pointing `aca` at sensitive accounts.
 - **Provider terms apply.** When you use a provider, you agree to that provider's terms of service. For Bedrock, that's AWS's own terms (data stays in your AWS account boundary). For Anthropic / OpenAI / Google, that's their respective enterprise / API terms. Read them.
 - **Audit log is your friend.** Every executed command — including its stdout, stderr, and exit code — lands in `audit.log` (JSONL). If you ever need to reconstruct what happened, it's all there. Don't disable `logging.auditLog` unless you have a specific reason.
+- **API keys in the config file persist to disk.** As of 0.6.0, you can put your LLM provider API key in `<provider>.apiKey` for convenience. The env var still takes precedence when both are set. Putting a key on disk is a meaningful step down from keeping it in your shell environment: backup tools, accidental `git add .` from the wrong directory, screen-sharing, and shoulder-surfing all become realistic leak vectors. The config file is created with mode 0600 by `aca config`, but that doesn't help if you edit it with another tool that resets permissions, or if you copy your `~/.config` into a dotfiles repo. Use the env var path when possible; reserve the config-file path for casual local use.
 - **No warranty.** **You use this agent at your own risk.** The authors are not responsible for unintended AWS API calls, deleted resources, exceeded budgets, or any other damage caused by using this tool. If you wouldn't run `aws` commands blindly from a script you found in someone's gist, don't run `aca` blindly either.
 
 ## Trademark & affiliation
@@ -78,7 +79,9 @@ Default contents (created by `aca config`):
 ```json
 {
   "provider": "anthropic",
-  "model": "claude-sonnet-4-5-20250929",
+  "anthropic": {
+    "model": "claude-sonnet-4-6"
+  },
   "maxSteps": 15,
   "logging": {
     "level": "error",
@@ -97,28 +100,43 @@ Default contents (created by `aca config`):
 }
 ```
 
-Optional fields (omit if you don't need them):
+A more populated config showing all four providers (you only need the block for the active provider; the others are illustrative):
 
 ```json
 {
-  "apiKeyEnv": "MY_CUSTOM_ANTHROPIC_KEY",
-  "defaultRegion": "eu-west-1",
-  "scriptFolder": "/home/me/aws-scripts",
+  "provider": "anthropic",
+  "anthropic": {
+    "model": "claude-sonnet-4-6",
+    "apiKey": "sk-ant-...",
+    "apiKeyEnv": "MY_CUSTOM_ANTHROPIC_KEY"
+  },
+  "openai": {
+    "model": "gpt-5",
+    "apiKey": "sk-..."
+  },
+  "google": {
+    "model": "gemini-2.5-pro",
+    "apiKey": "..."
+  },
   "bedrock": {
+    "model": "us.anthropic.claude-sonnet-4-6",
     "region": "us-east-1",
     "profile": "shared-services"
-  }
+  },
+  "defaultRegion": "eu-west-1",
+  "scriptFolder": "/home/me/aws-scripts"
 }
 ```
+
+Per-provider configuration lives in a top-level block named after the provider (`anthropic`, `openai`, `google`, `bedrock`). The active provider is selected by the top-level `provider` field, and its block must exist with at least a `model` set. All other provider blocks are ignored at runtime, but you can keep them populated if you switch providers often — `aca` won't read them until you change `provider`.
 
 ### Top-level keys
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | `anthropic` | LLM provider: `anthropic` \| `openai` \| `google` \| `bedrock` |
-| `model` | `claude-sonnet-4-5-20250929` | Model identifier (Bedrock uses fully-qualified IDs — see below) |
-| `apiKeyEnv` | — | Override the env var name that holds the API key (ignored for `bedrock`) |
-| `bedrock` | — | Bedrock-specific settings (see below). Only used when `provider = "bedrock"`. |
+| `provider` | `anthropic` | Active LLM provider: `anthropic` \| `openai` \| `google` \| `bedrock`. The matching top-level block must exist and contain a `model`. |
+| `anthropic`, `openai`, `google` | — | Per-provider blocks for the three keyed providers. See "Per-provider keys" below. |
+| `bedrock` | — | Bedrock provider block. See "Bedrock" below. |
 | `defaultRegion` | — | AWS region injected into every AWS CLI command when the agent didn't specify one |
 | `caching` | `true` | Enable prompt caching for providers that support it. See "Prompt caching" below. |
 | `maxSteps` | `15` | Hard cap on agent reasoning/tool steps per request (range 1-50) |
@@ -129,6 +147,28 @@ Optional fields (omit if you don't need them):
 | `forceInteractive` | `false` | Run every AWS CLI command with inherited stdio. Persistent equivalent of `--interactive`/`-i`. Almost always leave unset and use the CLI flag for one-offs. |
 | `historyLimit` | `200` | Max history entries kept in memory for context |
 | `scriptFolder` | `$XDG_DATA_HOME/aws-cli-agent/scripts` | Where saved bash scripts are written |
+
+### Per-provider keys (anthropic, openai, google)
+
+All three keyed providers accept the same three fields:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `<provider>.model` | yes | Model identifier (e.g. `claude-sonnet-4-6`, `gpt-5`, `gemini-2.5-pro`). Required when this provider is active. |
+| `<provider>.apiKey` | no | API key for this provider. **SECURITY:** putting the key here persists it to disk; prefer the env var. The env var wins if both are set. |
+| `<provider>.apiKeyEnv` | no | Override the env var name read for this provider. Default names: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`. |
+
+**API key resolution order** (highest priority first):
+
+1. Env var named by `<provider>.apiKeyEnv` (if that field is set).
+2. Default env var for the provider (e.g. `ANTHROPIC_API_KEY`).
+3. `<provider>.apiKey` from the config file.
+
+If none of the above is set, the run fails with an error listing all three options.
+
+When the key is resolved from the config file instead of an env var, `aca` writes a debug-level note to `general.log` ("API key loaded from config file (no env var set)") so a forensic investigation can see what happened. The key value itself is never logged.
+
+The config file is created with file mode `0600` (owner read/write only) when `aca config` runs. If you edit it manually with another tool, `aca` won't re-permission it on read — that's on you.
 
 ### Logging
 
@@ -160,13 +200,13 @@ aca --region eu-west-1 "list ec2 instances in my-staging"
 
 ### Bedrock
 
-When `provider = "bedrock"`, configure region and (optionally) profile via the nested `bedrock` object:
+When `provider = "bedrock"`, configure model, region, and (optionally) profile in the `bedrock` block:
 
 ```json
 {
   "provider": "bedrock",
-  "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "bedrock": {
+    "model": "us.anthropic.claude-sonnet-4-6",
     "region": "us-east-1",
     "profile": "shared-services"
   }
@@ -176,6 +216,7 @@ When `provider = "bedrock"`, configure region and (optionally) profile via the n
 - **Model IDs**: Bedrock uses fully-qualified inference-profile IDs. The `us.` / `eu.` / `apac.` prefix is required for most newer Anthropic models. Use `aws bedrock list-inference-profiles --region <region>` to discover what your account can invoke.
 - **`bedrock.profile`** is independent from operational profiles. The agent calls Bedrock under `bedrock.profile`, but each AWS CLI command it issues uses its own `--profile` (resolved from the user's prompt / history). This is the right pattern when one account holds Bedrock entitlements and other accounts hold workloads.
 - If `bedrock.region` is unset, falls back to `AWS_REGION` / `AWS_DEFAULT_REGION` env vars.
+- Bedrock uses the AWS credential chain — there's no `apiKey` field.
 
 ### Prompt caching
 

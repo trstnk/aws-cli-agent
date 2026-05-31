@@ -4,8 +4,58 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
-## [0.5.0] - 2026-05-19
+## [0.6.0] - 2026-05-31
 
+### Breaking
+
+- **Config schema restructured: per-provider blocks at top level.** Provider-specific fields (`model`, `apiKey`, `apiKeyEnv`) move into a top-level block named after the provider. The old top-level `model` and `apiKeyEnv` fields are gone. For Bedrock, the `model` field also moves into the existing `bedrock` block (which already held `region` and `profile`).
+
+  Old:
+  ```json
+  {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "apiKeyEnv": "MY_KEY",
+    "bedrock": { "region": "us-east-1" }
+  }
+  ```
+
+  New:
+  ```json
+  {
+    "provider": "anthropic",
+    "anthropic": {
+      "model": "claude-sonnet-4-6",
+      "apiKeyEnv": "MY_KEY"
+    },
+    "bedrock": {
+      "model": "us.anthropic.claude-sonnet-4-6",
+      "region": "us-east-1"
+    }
+  }
+  ```
+
+  Old configs fail to load with a clear migration message pointing at the new shape — no silent fallback.
+
+- **Strict validation of the active provider block.** When `provider` is set, the matching top-level block must exist with a `model` field. Previously the top-level `model` default kicked in if absent; now you have to be explicit. Run `aca config` to scaffold a working default.
+
+### Added
+
+- **`<provider>.apiKey` config field for Anthropic / OpenAI / Google.** Convenience for casual users who don't want to set env vars; persists to disk so see the security note in the README. Resolution order: `apiKeyEnv`-named env var → default provider env var → `<provider>.apiKey` from config → error. The env var always wins when both are set.
+- **Default config file is created with mode `0600`** (owner read/write only) so it isn't world-readable on creation. Doesn't help if you edit the file with another tool that resets permissions.
+- **Debug-level log note when the API key resolves from config** rather than an env var. Helps post-hoc forensics see what happened. The key value itself is never logged.
+- **Helpful migration error for pre-0.6 configs.** Loading a config file with top-level `model` or `apiKeyEnv` produces a side-by-side old/new shape diff instead of a cryptic zod parse failure.
+
+### Changed
+
+- **`apiKeyEnv` moves from top-level into the per-provider block.** It was a top-level field since 0.1.0; now it lives at `<provider>.apiKeyEnv`. Same semantics, just nested.
+- **`apiKeyEnv` set to an empty env var emits a warning.** Previously the fall-through to the default env var was silent — convenient until a user noticed the wrong account was being charged. Now if `<provider>.apiKeyEnv` names a variable that isn't set, `aca` prints a warning to stderr and falls back to the default env var (and then to `<provider>.apiKey`). The warning is purely informational; resolution still continues.
+
+### Fixed
+
+- **Ctrl-C inside an SSM session no longer prints "Cannot perform start session: read /dev/stdin: input/output error".** Previously, Ctrl-C delivered SIGINT to both the AWS CLI subprocess AND aca; aca's process tore down the shared stdin before the AWS CLI's own cleanup completed, producing the I/O-error message. The fix: `aca` installs a no-op SIGINT handler for the lifetime of any interactive AWS CLI subprocess, leaving the signal exclusively to the child. The AWS CLI now performs its normal clean shutdown and exits with code 0 or 130, which aca recognizes as a clean termination.
+
+## [0.5.0] - 2026-05-19
 ### Added
 
 - **Graceful error handling for AWS CLI failures.** AWS CLI exit codes

@@ -124,15 +124,41 @@ function runInteractive(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
+    // Detach our SIGINT handler for the duration of the child's lifetime.
+    // Background: when the user presses Ctrl-C inside an SSM session, the
+    // OS delivers SIGINT to the whole foreground process group — both the
+    // aws CLI child AND this Node process. Node's default SIGINT handler
+    // would terminate us, which tears down the inherited stdin file
+    // descriptor before the aws CLI has finished its own cleanup. The
+    // result is the aws CLI seeing "input/output error" on /dev/stdin and
+    // printing a confusing error to the user.
+    //
+    // By installing a no-op SIGINT listener, we override Node's default
+    // behavior: Node sees the signal as "handled" and doesn't terminate
+    // us. The aws CLI subprocess gets the signal too (same process group)
+    // and runs its own clean shutdown — closing the SSM session politely,
+    // exiting with code 0 or 130. We then continue normally.
+    //
+    // The listener is removed in `close` so SIGINT during normal agent
+    // reasoning still aborts the run as expected.
+    const noopSigint = () => {
+      /* deliberately empty — see comment above */
+    };
+    process.on('SIGINT', noopSigint);
+
     const proc = spawn(cmd, args, {
       env: process.env,
-      stdio: 'inherit', // ← the fix: child reuses parent's stdin/stdout/stderr
+      stdio: 'inherit', // child reuses parent's stdin/stdout/stderr
     });
-    proc.on('error', reject);
-    proc.on('close', (code) =>
+    proc.on('error', (err) => {
+      process.removeListener('SIGINT', noopSigint);
+      reject(err);
+    });
+    proc.on('close', (code) => {
+      process.removeListener('SIGINT', noopSigint);
       // We can't observe stdout/stderr — they went to the user's terminal.
-      resolve({ stdout: '', stderr: '', code: code ?? 0 }),
-    );
+      resolve({ stdout: '', stderr: '', code: code ?? 0 });
+    });
   });
 }
 
