@@ -1,4 +1,4 @@
-# aws-cli-agent (`aca`)
+# aws-cli-agent (aca)
 
 > Agentic AI assistant that turns natural-language requests into AWS CLI commands and runs them locally.
 
@@ -8,18 +8,20 @@ You describe what you want in plain English. The agent searches your local histo
 
 ```bash
 # Interactive session to an instance the agent has to look up
-aca "start ssm session to instance my-instance in my-account"
+aca start ssm session to instance my-instance in my-account
 
-# Use the AWS CLI's table output for human consumption
-aca "print tags of gitlab instance as table"
+# List resources
+aca list instance ids, names in my-account as text
 
-# Cross-resource composition: instances, their IAM roles, and the attached policies
-aca "list ec2 instance id, name, instance profile arn plus the iam policies in the attached iam role as json in my-account"
+# Cross-resource composition: instances, their profiles, and the attached policies
+aca list ec2 instance ids, names and the iam policies in the instance profiles as json in my-account
 ```
 
-The first example is interactive — the agent runs a read-only `describe-instances` to resolve the name, then prompts before opening the SSM session. The second produces a table on stdout, pipeable to `less` or `grep`. The third is the kind of request where the agent will most likely build a bash script with `jq` plumbing rather than chain individual AWS CLI calls.
+The first example is interactive — the agent runs a read-only `describe-instances` to resolve the name, then prompts before opening the SSM session. The second produces a text list on stdout, pipeable to `less` or `grep`. The third is the kind of request where the agent will most likely build a bash script with `jq` plumbing rather than chain individual AWS CLI calls.
 
-## ⚠️ Warning — read before using
+![aca Demo](resources/aca-demo-v0.6.1.gif)
+
+## Warning - read before using
 
 `aca` runs real AWS CLI commands against your real AWS accounts. Treat it accordingly.
 
@@ -31,14 +33,8 @@ The first example is interactive — the agent runs a read-only `describe-instan
 - **Your prompts go to the model provider.** AWS CLI output is fed back to the model as part of subsequent steps. That means resource names, instance IDs, tag values, and any other data that appears in command output is transmitted to Anthropic / OpenAI / Google / Bedrock (depending on your provider choice). The provider does not retain this data beyond the request itself (and the cache TTL, ~5 minutes for cached prefixes), but **confirm this is compatible with the policies you have to respect** before pointing `aca` at sensitive accounts.
 - **Provider terms apply.** When you use a provider, you agree to that provider's terms of service. For Bedrock, that's AWS's own terms (data stays in your AWS account boundary). For Anthropic / OpenAI / Google, that's their respective enterprise / API terms. Read them.
 - **Audit log is your friend.** Every executed command — including its stdout, stderr, and exit code — lands in `audit.log` (JSONL). If you ever need to reconstruct what happened, it's all there. Don't disable `logging.auditLog` unless you have a specific reason.
-- **API keys in the config file persist to disk.** As of 0.6.0, you can put your LLM provider API key in `<provider>.apiKey` for convenience. The env var still takes precedence when both are set. Putting a key on disk is a meaningful step down from keeping it in your shell environment: backup tools, accidental `git add .` from the wrong directory, screen-sharing, and shoulder-surfing all become realistic leak vectors. The config file is created with mode 0600 by `aca config`, but that doesn't help if you edit it with another tool that resets permissions, or if you copy your `~/.config` into a dotfiles repo. Use the env var path when possible; reserve the config-file path for casual local use.
+- **API keys in the config file persist to disk.** As of 0.6.0, you can put your LLM provider API key in `<provider>.apiKey` for convenience. The env var still takes precedence when both are set. Putting a key on disk is a meaningful step down from keeping it in your shell environment: backup tools, accidental `git add .` from the wrong directory, screen-sharing, and shoulder-surfing all become realistic leak vectors. Use the env var path when possible; reserve the config-file path for casual local use.
 - **No warranty.** **You use this agent at your own risk.** The authors are not responsible for unintended AWS API calls, deleted resources, exceeded budgets, or any other damage caused by using this tool. If you wouldn't run `aws` commands blindly from a script you found in someone's gist, don't run `aca` blindly either.
-
-## Trademark & affiliation
-
-`aws-cli-agent` (`aca`) is an independent project, not affiliated with or
-endorsed by Amazon Web Services. "AWS" and "Amazon Web Services" are
-trademarks of Amazon.com, Inc.
 
 ## Installation
 
@@ -67,7 +63,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # (Bedrock needs no API key — uses your AWS credential chain)
 
 # 3. Try it
-aca "list all s3 buckets in account my-staging"
+aca list all s3 buckets in account my-staging
 ```
 
 ## Configuration
@@ -170,6 +166,26 @@ When the key is resolved from the config file instead of an env var, `aca` write
 
 The config file is created with file mode `0600` (owner read/write only) when `aca config` runs. If you edit it manually with another tool, `aca` won't re-permission it on read — that's on you.
 
+### Bedrock
+
+When `provider = "bedrock"`, configure model, region, and (optionally) profile in the `bedrock` block:
+
+```json
+{
+  "provider": "bedrock",
+  "bedrock": {
+    "model": "us.anthropic.claude-sonnet-4-6",
+    "region": "us-east-1",
+    "profile": "shared-services"
+  }
+}
+```
+
+- **Model IDs**: Bedrock uses fully-qualified inference-profile IDs. The `us.` / `eu.` / `apac.` prefix is required for most newer Anthropic models. Use `aws bedrock list-inference-profiles --region <region>` to discover what your account can invoke.
+- **`bedrock.profile`** is independent from operational profiles. The agent calls Bedrock under `bedrock.profile`, but each AWS CLI command it issues uses its own `--profile` (resolved from the user's prompt / history). This is the right pattern when one account holds Bedrock entitlements and other accounts hold workloads.
+- If `bedrock.region` is unset, falls back to `AWS_REGION` / `AWS_DEFAULT_REGION` env vars.
+- Bedrock uses the AWS credential chain — there's no `apiKey` field.
+
 ### Logging
 
 ```json
@@ -197,26 +213,6 @@ If `defaultRegion` is set, `aca` appends `--region <value>` to every AWS CLI com
 ```bash
 aca --region eu-west-1 "list ec2 instances in my-staging"
 ```
-
-### Bedrock
-
-When `provider = "bedrock"`, configure model, region, and (optionally) profile in the `bedrock` block:
-
-```json
-{
-  "provider": "bedrock",
-  "bedrock": {
-    "model": "us.anthropic.claude-sonnet-4-6",
-    "region": "us-east-1",
-    "profile": "shared-services"
-  }
-}
-```
-
-- **Model IDs**: Bedrock uses fully-qualified inference-profile IDs. The `us.` / `eu.` / `apac.` prefix is required for most newer Anthropic models. Use `aws bedrock list-inference-profiles --region <region>` to discover what your account can invoke.
-- **`bedrock.profile`** is independent from operational profiles. The agent calls Bedrock under `bedrock.profile`, but each AWS CLI command it issues uses its own `--profile` (resolved from the user's prompt / history). This is the right pattern when one account holds Bedrock entitlements and other accounts hold workloads.
-- If `bedrock.region` is unset, falls back to `AWS_REGION` / `AWS_DEFAULT_REGION` env vars.
-- Bedrock uses the AWS credential chain — there's no `apiKey` field.
 
 ### Prompt caching
 
@@ -414,6 +410,12 @@ aca ... 2>/dev/null                                  # silence the agent's chrom
 ```
 
 Without this rule, the approval prompts and reasoning lines would land in the next process's stdin and corrupt downstream tools. With it, the agent is invisible to pipelines — exactly as if you'd run the `aws` command directly.
+
+## Trademark & affiliation
+
+`aws-cli-agent` (`aca`) is an independent project, not affiliated with or
+endorsed by Amazon Web Services. "AWS" and "Amazon Web Services" are
+trademarks of Amazon.com, Inc.
 
 ## License
 
