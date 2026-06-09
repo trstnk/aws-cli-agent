@@ -130,7 +130,7 @@ export async function runAgent(opts: {
   // Inline a small recent-history hint so the model has soft context even
   // before it explicitly calls query_history. Statelessness on the server
   // side is preserved: we send the full prompt each call.
-  const recent = history.recent(5);
+  const recent = history.recent(5).reverse();
   const historyHint = recent.length
     ? '\n\nRecent past requests (most recent first):\n' +
       recent
