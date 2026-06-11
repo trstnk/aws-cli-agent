@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.6.3] - 2026-06-11
+
+### Changed
+
+- **History command** History entries are now printed in chronological order (most recent entry is printed last)
+- **README.md** Minor changes in the README.md.
+
 ## [0.6.2] - 2026-06-05
 
 ### Changed
