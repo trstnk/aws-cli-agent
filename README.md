@@ -7,8 +7,8 @@ You describe what you want in plain English. The agent searches your local histo
 ## Examples
 
 ```bash
-# Interactive session to an instance the agent has to look up
-aca start ssm session to instance my-instance in my-account
+# Interactive session on an instance the agent has to look up
+aca start ssm session on instance my-instance in my-account
 
 # List resources
 aca list instance ids, names in my-account as text
@@ -19,7 +19,7 @@ aca list ec2 instance ids, names and the iam policies in the instance profiles a
 
 The first example is interactive — the agent runs a read-only `describe-instances` to resolve the name, then prompts before opening the SSM session. The second produces a text list on stdout, pipeable to `less` or `grep`. The third is the kind of request where the agent will most likely build a bash script with `jq` plumbing rather than chain individual AWS CLI calls.
 
-![aca Demo](resources/aca-demo-v0.6.1.gif)
+![aca Demo](resources/aca-demo-v0.6.3.gif)
 
 ## Warning - read before using
 
@@ -33,7 +33,6 @@ The first example is interactive — the agent runs a read-only `describe-instan
 - **Your prompts go to the model provider.** AWS CLI output is fed back to the model as part of subsequent steps. That means resource names, instance IDs, tag values, and any other data that appears in command output is transmitted to Anthropic / OpenAI / Google / Bedrock (depending on your provider choice). The provider does not retain this data beyond the request itself (and the cache TTL, ~5 minutes for cached prefixes), but **confirm this is compatible with the policies you have to respect** before pointing `aca` at sensitive accounts.
 - **Provider terms apply.** When you use a provider, you agree to that provider's terms of service. For Bedrock, that's AWS's own terms (data stays in your AWS account boundary). For Anthropic / OpenAI / Google, that's their respective enterprise / API terms. Read them.
 - **Audit log is your friend.** Every executed command — including its stdout, stderr, and exit code — lands in `audit.log` (JSONL). If you ever need to reconstruct what happened, it's all there. Don't disable `logging.auditLog` unless you have a specific reason.
-- **API keys in the config file persist to disk.** As of 0.6.0, you can put your LLM provider API key in `<provider>.apiKey` for convenience. The env var still takes precedence when both are set. Putting a key on disk is a meaningful step down from keeping it in your shell environment: backup tools, accidental `git add .` from the wrong directory, screen-sharing, and shoulder-surfing all become realistic leak vectors. Use the env var path when possible; reserve the config-file path for casual local use.
 - **No warranty.** **You use this agent at your own risk.** The authors are not responsible for unintended AWS API calls, deleted resources, exceeded budgets, or any other damage caused by using this tool. If you wouldn't run `aws` commands blindly from a script you found in someone's gist, don't run `aca` blindly either.
 
 ## Installation
@@ -56,7 +55,7 @@ Requirements:
 # 1. Create the config file with sane defaults
 aca config
 
-# 2. Set the API key for your chosen provider (env var only — never in config)
+# 2. Set the API key for your chosen provider
 export ANTHROPIC_API_KEY=sk-ant-...
 # or OPENAI_API_KEY=...
 # or GOOGLE_GENERATIVE_AI_API_KEY=...
@@ -126,6 +125,8 @@ A more populated config showing all four providers (you only need the block for 
 
 Per-provider configuration lives in a top-level block named after the provider (`anthropic`, `openai`, `google`, `bedrock`). The active provider is selected by the top-level `provider` field, and its block must exist with at least a `model` set. All other provider blocks are ignored at runtime, but you can keep them populated if you switch providers often — `aca` won't read them until you change `provider`.
 
+The config file is created with file mode `0600` (owner read/write only) when `aca config` runs. If you edit it manually with another tool, `aca` won't re-permission it on read — that's on you.
+
 ### Top-level keys
 
 | Key | Default | Meaning |
@@ -159,12 +160,6 @@ All three keyed providers accept the same three fields:
 1. Env var named by `<provider>.apiKeyEnv` (if that field is set).
 2. Default env var for the provider (e.g. `ANTHROPIC_API_KEY`).
 3. `<provider>.apiKey` from the config file.
-
-If none of the above is set, the run fails with an error listing all three options.
-
-When the key is resolved from the config file instead of an env var, `aca` writes a debug-level note to `general.log` ("API key loaded from config file (no env var set)") so a forensic investigation can see what happened. The key value itself is never logged.
-
-The config file is created with file mode `0600` (owner read/write only) when `aca config` runs. If you edit it manually with another tool, `aca` won't re-permission it on read — that's on you.
 
 ### Bedrock
 
@@ -203,8 +198,6 @@ When `provider = "bedrock"`, configure model, region, and (optionally) profile i
 | `logging.auditLog` | `true` | Write `audit.log` — JSONL trail of every executed command/script with full stdout/stderr/exit code. Bash scripts also log full source. |
 | `logging.reasoningLog` | `false` | Write `reasoning.log` — text record of agent reasoning steps and tool calls. |
 | `logging.usageLog` | `true` | Write `usage.log` — one JSONL entry per `aca` invocation with token totals (input + completion + total + cache hit/miss). |
-
-Logs are file-only. None of these settings affect what's printed to the console — that's a separate concern handled by `verbose` (reasoning lines) and the CLI's normal output (the AWS CLI's stdout passthrough plus approval prompts). To watch operational logs live in a separate terminal: `tail -f ~/.local/state/aws-cli-agent/general.log`.
 
 ### `defaultRegion` and `--region`
 
