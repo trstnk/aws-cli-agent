@@ -66,7 +66,7 @@ export class History {
    */
   search(query: string, limit = 10): HistoryEntry[] {
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return this.recent(limit).reverse();
+    if (tokens.length === 0) return this.recent(limit);
 
     const scored = this.entries.map((e, idx) => {
       const hay = [
@@ -90,6 +90,6 @@ export class History {
   }
 
   recent(limit = 10): HistoryEntry[] {
-    return this.entries.slice(-limit);
+    return this.entries.slice(-limit).reverse();
   }
 }

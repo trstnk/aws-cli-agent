@@ -115,7 +115,7 @@ export async function main(argv: string[]): Promise<void> {
       const h = new History(cfg.historyLimit);
       await h.load();
       const n = Number.parseInt(cmdOpts.count, 10);
-      for (const e of h.recent(Number.isFinite(n) ? n : 10)) {
+      for (const e of h.recent(Number.isFinite(n) ? n : 10).reverse()) {
         process.stdout.write(`${chalk.dim(e.timestamp)} ${chalk.bold(e.input)}\n`);
         if (e.profile) process.stdout.write(`  profile: ${e.profile}\n`);
         for (const c of e.commands) {
