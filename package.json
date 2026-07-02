@@ -52,7 +52,7 @@
   "homepage": "https://github.com/trstnk/aws-cli-agent#readme",
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.111",
-    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/anthropic": "^4.0.1",
     "@ai-sdk/google": "^3.0.80",
     "@ai-sdk/openai": "^3.0.67",
     "@aws-sdk/credential-providers": "^3.1057.0",
