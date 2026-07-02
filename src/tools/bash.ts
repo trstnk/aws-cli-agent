@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { tool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { select } from '@inquirer/prompts';
 import chalk from 'chalk';
@@ -173,7 +173,7 @@ export function bashScriptTool(opts: {
   config: Config;
   audit: import('../audit.js').AuditLogger;
   record: (entry: import('./index.js').ExecutionRecord) => void;
-}) {
+}) : Tool {
   return tool({
     description:
       'Execute a bash script. Use this for multi-step / multi-account workflows that need looping, jq filtering, or composition (e.g. "list all RDS Aurora databases in all accounts of org X"). The user is prompted to (a) execute the script now, (b) save it to disk for later review or scheduled execution, or (c) cancel. Always start scripts with `set -euo pipefail`.',

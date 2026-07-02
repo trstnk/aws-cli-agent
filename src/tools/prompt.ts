@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { confirm, input, password, select } from '@inquirer/prompts';
 import chalk from 'chalk';
@@ -105,7 +105,7 @@ async function askOne(q: Question, logger: Logger): Promise<string> {
  * preference for kind="choice" when the candidate set is enumerable —
  * picking from a list is faster and less error-prone than typing.
  */
-export function promptUserTool(opts: { logger: Logger }) {
+export function promptUserTool(opts: { logger: Logger }) : Tool {
   return tool({
     description:
       `Ask the user ONE question to gather missing information mid-reasoning. ` +
@@ -129,7 +129,7 @@ export function promptUserTool(opts: { logger: Logger }) {
  * info (e.g. "I need a source bucket, a destination bucket, and a region").
  * Each question's `key` becomes the field name in the returned object.
  */
-export function promptUserMultiTool(opts: { logger: Logger }) {
+export function promptUserMultiTool(opts: { logger: Logger }) : Tool {
   return tool({
     description:
       `Ask the user MULTIPLE related questions in one round, returning a map of key → answer. ` +

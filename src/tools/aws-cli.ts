@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { tool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
@@ -180,7 +180,7 @@ export function awsCliTool(opts: {
   config: Config;
   audit: import('../audit.js').AuditLogger;
   record: (entry: import('./index.js').ExecutionRecord) => void;
-}) {
+}): Tool {
   return tool({
     description:
       'Execute an AWS CLI command. `args` does NOT include the leading "aws" - just the subcommand and parameters, e.g. ["ec2","describe-instances","--profile","my-profile","--output","json"]. ALWAYS use --output json on discovery calls so you can parse results. Read-only commands (describe-/list-/get-/s3 ls) auto-approve if allowed by config; mutating commands always prompt. ' +

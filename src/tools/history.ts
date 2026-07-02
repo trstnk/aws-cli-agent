@@ -1,9 +1,9 @@
-import { tool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import type { History } from '../history.js';
 import type { Logger } from '../logger.js';
 
-export function historyTool(opts: { history: History; logger: Logger }) {
+export function historyTool(opts: { history: History; logger: Logger }) : Tool {
   return tool({
     description:
       'Search the local history of past requests/commands to recover context — e.g. which AWS profile was used for a given account name, common bucket/instance names, etc. Run this EARLY (typically first) when a request mentions an account, resource, or scope by name.',

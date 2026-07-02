@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { tool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import type { Logger } from '../logger.js';
 
-export function listProfilesTool(opts: { logger: Logger }) {
+export function listProfilesTool(opts: { logger: Logger }) : Tool {
   return tool({
     description:
       'List AWS named profiles configured locally in ~/.aws/config and ~/.aws/credentials. Use this when the user references an account by name and history did not resolve it.',
