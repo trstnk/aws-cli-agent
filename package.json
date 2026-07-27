@@ -54,7 +54,7 @@
     "@ai-sdk/amazon-bedrock": "^5.0.12",
     "@ai-sdk/anthropic": "^4.0.1",
     "@ai-sdk/google": "^4.0.6",
-    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/openai": "^4.0.20",
     "@aws-sdk/credential-providers": "^3.1057.0",
     "@inquirer/prompts": "^8.5.1",
     "ai": "^7.0.4",
