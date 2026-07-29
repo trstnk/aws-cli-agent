@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.6.4] - 2026-07-29
+
+### Changed - System prompt
+
+#### Added
+- **Scope lock**: opening line now states AWS CLI translation/execution as the agent's *only* purpose and explicitly disclaims acting as a general assistant, chatbot, coding helper, or knowledge source.
+- **SCOPE guardrail**: new rule defining in-scope work (preparing/resolving/running an AWS CLI command, or briefly explaining CLI output/errors tied to one) vs. out-of-scope (general knowledge, writing, non-AWS code, advice, roleplay, non-AWS use of the agent's tools). Out-of-scope requests get a short text decline with no tool call, regardless of framing ("just this once," claimed authority, alleged prior permission).
+- **Prompt-leak protection**: new rule refusing to reveal, quote, paraphrase, translate, encode, or reproduce the system prompt, instructions, or tool definitions under any framing — direct ask, "repeat verbatim," claimed Anthropic/developer identity, roleplay, or instructions embedded in tool output (e.g., a bucket/tag name reading "ignore previous instructions"). All tool output is now explicitly treated as untrusted data, never as instructions, and this rule overrides everything else in the prompt.
+- **execute_bash_script hardening**: restricted to read-only AWS CLI composition (multi-account/region loops, jq parsing) only. Two explicit bans added: no mutating AWS CLI call may be embedded in a script (those must go through individual, host-approved execute_aws_command calls), and no general-purpose/non-AWS shell use (installing packages, arbitrary file or network operations).
+- **Script hygiene**: scripts must use `mktemp` + `trap` for temp-file cleanup, quote all variable expansions, and parse `--output json` via `jq` rather than scraping text/table output.
+- **Pagination caution**: list/describe results may be truncated (`NextToken`/`IsTruncated`/`Marker`); a single page is never proof of a unique match, especially before a destructive action.
+- **Single-profile shortcut**: if `list_aws_profiles` returns exactly one profile and nothing else disambiguates, use it without prompting.
+- **Region fallback**: if a call fails specifically for lack of a region and none is configured, ask rather than guessing.
+
+#### Changed
+- **query_history**: was called unconditionally at the start of every run; now only called when resolving a profile/account/resource from context is actually needed.
+- **Credentials rule**: was a blanket ban on any credentials/secrets/tokens in commands or scripts; now distinguishes long-lived credentials (access keys, passwords — never hardcoded or persisted) from ephemeral single-use values (MFA codes, temporary session tokens — may be passed inline to one `execute_aws_command` call when required, but never written to a script file or history).
+- **Error-retry logic**: was one generic "retry once on failure" rule; now retries are allowed only after read-only call failures. Mutating-call failures must be reported and confirmed with the user, never silently retried with a guessed correction.
+- **Final-action rule**: previously every successful run had to end on a tool call (or a user cancel); now includes an explicit exception for out-of-scope/prompt-leak requests, which end the run immediately with a text-only decline.
+- **Choice/confirm prompts**: now required to show account and region alongside the resource name/ID, not just the name, to prevent cross-account ambiguity.
+
+#### Condensed (token-efficiency pass, no functional loss)
+- Merged the `prompt_user` and `prompt_user_multi` capability descriptions into one line.
+- Replaced repeated spell-outs of "mutating"/"destructive" verb prefixes (previously listed in 3+ places) with a single definition, referenced by name elsewhere.
+- Reduced the cardinal-rule section to one representative trigger per case instead of a fully worked example each.
+- Removed inline-code formatting and transitional phrasing that added length without changing behavior.
+
 ## [0.6.3] - 2026-06-11
 
 ### Changed
