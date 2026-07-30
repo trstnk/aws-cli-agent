@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.7.0] - 2026-07-30
+
+### Changed
+
+#### System prompt
+
+**1. Bash script scope has been loosened**
+- The tool description drops the read-only restriction (now just *"run a bash script... for multiple AWS CLI calls / loops / jq parsing"*). The replacement rule (new Rule 6) defines allowed script contents (AWS CLI calls, jq/grep/awk/sed parsing, basic shell control flow; no non-AWS network calls, no writes outside temp dir, no unrelated CLIs) but **no longer explicitly bans mutating AWS commands inside scripts**.
+
+**2. New pagination safeguard added (new Rule 4)**
+- Adds an explicit cap: identifier-resolution pagination stops at 10 pages (or the host's configured max, if lower). If still unresolved, the agent must stop and prompt the user for a narrowing filter instead of continuing to paginate - applies both to single-target resolution and uniqueness checks before mutating/destructive calls.
+
+**3. Minor rewording, no behavior change**
+- Tool descriptions reworded slightly (e.g., `query_history`, `prompt_user`/`prompt_user_multi`) for clarity - same functionality.
+- Cardinal Rule / "Don't ask when" bullet lists: reformatted (arrows → prose), content identical.
+- Rule 9 (old) → Rule 10 (new): reworded to state the final-action requirement more directly; the old explicit carve-out for "out-of-scope/prompt-leak request" ending without a tool call was dropped from this rule's text (though it's still covered under the SCOPE section, which requires declines with no tool call).
+- Remaining rules (credentials, output format, region defaults, interactive commands, failure handling, conciseness) are unchanged in substance, just renumbered due to the Rule 4 insertion.
+
 ## [0.6.4] - 2026-07-29
 
 ### Changed - System prompt
