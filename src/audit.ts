@@ -33,7 +33,16 @@ export type AuditScriptEntry = {
   script: string;
 };
 
-export type AuditEntry = AuditCommandEntry | AuditScriptEntry;
+export type AuditDocumentationEntry = {
+  timestamp: string;
+  type: 'documentation_lookup';
+  action: 'search' | 'fetch';
+  input: string;
+  ok: boolean;
+  content: string;
+};
+
+export type AuditEntry = AuditCommandEntry | AuditScriptEntry | AuditDocumentationEntry;
 
 export class AuditLogger {
   private readonly stream: fs.WriteStream | null;
@@ -53,6 +62,10 @@ export class AuditLogger {
 
   logScript(entry: Omit<AuditScriptEntry, 'timestamp' | 'type'>): void {
     this.write({ timestamp: new Date().toISOString(), type: 'bash_script', ...entry });
+  }
+
+  logDocumentation(entry: Omit<AuditDocumentationEntry, 'timestamp' | 'type'>): void {
+    this.write({ timestamp: new Date().toISOString(), type: 'documentation_lookup', ...entry });
   }
 
   private write(entry: AuditEntry): void {

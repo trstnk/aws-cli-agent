@@ -78,6 +78,10 @@ Default contents (created by `aca config`):
     "model": "claude-sonnet-4-6"
   },
   "maxSteps": 15,
+  "search": {
+    "enabled": true,
+    "timeoutMs": 15000
+  },
   "logging": {
     "level": "error",
     "auditLog": true,
@@ -136,6 +140,8 @@ The config file is created with file mode `0600` (owner read/write only) when `a
 | `bedrock` | — | Bedrock provider block. See "Bedrock" below. |
 | `defaultRegion` | — | AWS region injected into every AWS CLI command when the agent didn't specify one |
 | `caching` | `true` | Enable prompt caching for providers that support it. See "Prompt caching" below. |
+| `search.enabled` | `true` | Offer public AWS documentation search and page fetching through Parallel; each lookup always prompts for approval. |
+| `search.timeoutMs` | `15000` | Total network timeout per documentation lookup (1000-60000 ms). |
 | `maxSteps` | `15` | Hard cap on agent reasoning/tool steps per request (range 1-50) |
 | `logging` | see below | All logging knobs |
 | `verbose` | `false` | Echo agent reasoning to the console as it runs |
@@ -144,6 +150,27 @@ The config file is created with file mode `0600` (owner read/write only) when `a
 | `forceInteractive` | `false` | Run every AWS CLI command with inherited stdio. Persistent equivalent of `--interactive`/`-i`. Almost always leave unset and use the CLI flag for one-offs. |
 | `historyLimit` | `200` | Max history entries kept in memory for context |
 | `scriptFolder` | `$XDG_DATA_HOME/aws-cli-agent/scripts` | Where saved bash scripts are written |
+
+### AWS documentation lookups
+
+When preparing an unfamiliar AWS CLI command, the agent can search public AWS
+documentation and fetch pages from `https://docs.aws.amazon.com` using
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp).
+Search uses Fast mode and needs no Parallel account or API key. The tools are
+available by default, but make no network request until you approve a lookup.
+Each prompt shows the exact query or URL that will be sent to Parallel. AWS
+command auto-approval settings never bypass this prompt. Use generic command
+terms and decline any query that includes private account or resource details.
+
+Set `"search": { "enabled": false }` in your config to remove both documentation
+tools. With search enabled, `search.timeoutMs` bounds each network operation;
+Ctrl-C cancels a prompt or an in-flight lookup. Failed lookups return an error to
+the agent without switching providers. Anonymous service limits may apply.
+
+Documentation goes back to the model as reference material; it does not appear
+on stdout or count as an executed AWS command. Approved lookups and their results
+are recorded as `documentation_lookup` events when `logging.auditLog` is enabled.
+The agent still needs your AWS command approval under the existing rules.
 
 ### Per-provider keys (anthropic, openai, google)
 

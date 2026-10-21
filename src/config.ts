@@ -84,6 +84,14 @@ export const ConfigSchema = z.object({
   /** Max reasoning/tool-use steps before the agent must conclude. */
   maxSteps: z.number().int().min(1).max(50).default(15),
 
+  /** Public AWS documentation lookups through Parallel Search MCP. */
+  search: z
+    .object({
+      enabled: z.boolean().default(true),
+      timeoutMs: z.number().int().min(1000).max(60000).default(15000),
+    })
+    .default({ enabled: true, timeoutMs: 15000 }),
+
   /** All logging knobs. */
   logging: LoggingSchema,
 
@@ -252,6 +260,7 @@ export function writeDefaultConfig(): string {
       provider: 'anthropic' as const,
       anthropic: { model: 'claude-sonnet-4-6' },
       maxSteps: 15,
+      search: { enabled: true, timeoutMs: 15000 },
       logging: {
         level: 'error' as const,
         auditLog: true,

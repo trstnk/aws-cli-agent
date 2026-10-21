@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { documentationTools } from './documentation.js';
 import { awsCliTool } from './aws-cli.js';
 import { bashScriptTool } from './bash.js';
 import { listProfilesTool } from './profiles.js';
@@ -45,6 +47,7 @@ export type ToolContext = {
  */
 export function createTools(ctx: ToolContext) {
   return {
+    ...documentationTools({ config: ctx.config, audit: ctx.audit, sessionId: randomUUID() }),
     query_history: historyTool({ history: ctx.history, logger: ctx.logger }),
     list_aws_profiles: listProfilesTool({ logger: ctx.logger }),
     prompt_user: promptUserTool({ logger: ctx.logger }),
