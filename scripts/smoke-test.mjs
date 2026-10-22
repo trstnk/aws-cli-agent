@@ -203,6 +203,34 @@ async function main() {
     }
   });
 
+  await check('openai-compatible provider validates and builds without a key', async () => {
+    // Local servers (LM Studio, Ollama) don't need an API key, and building
+    // the model must not touch the network.
+    const { ConfigSchema, validateActiveProvider } = await import(
+      `file://${path.join(distDir, 'config.js')}`
+    );
+    const { createModel } = await import(`file://${path.join(distDir, 'providers.js')}`);
+    const missingUrl = ConfigSchema.parse({
+      provider: 'openai-compatible',
+      'openai-compatible': { model: 'qwen3' },
+    });
+    let threw = false;
+    try {
+      validateActiveProvider(missingUrl);
+    } catch (err) {
+      threw = String(err.message).includes('baseURL');
+    }
+    assert(threw, 'missing baseURL should fail validation with a baseURL hint');
+
+    const cfg = ConfigSchema.parse({
+      provider: 'openai-compatible',
+      'openai-compatible': { model: 'qwen3', baseURL: 'http://localhost:11434/v1' },
+    });
+    validateActiveProvider(cfg);
+    const model = createModel(cfg);
+    assert(model.modelId === 'qwen3', `unexpected modelId: ${model.modelId}`);
+  });
+
   if (failures.length > 0) {
     console.error(`\n${failures.length} check(s) failed.`);
     process.exit(1);

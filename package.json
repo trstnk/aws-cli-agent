@@ -1,6 +1,6 @@
 {
   "name": "aws-cli-agent",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Agentic AI assistant that turns natural-language requests into AWS CLI commands and runs them locally.",
   "type": "module",
   "bin": {
@@ -35,7 +35,6 @@
     "ai",
     "agent",
     "llm",
-    "natural-language",
     "cli",
     "anthropic",
     "openai",
@@ -51,13 +50,14 @@
   },
   "homepage": "https://github.com/trstnk/aws-cli-agent#readme",
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^5.0.12",
-    "@ai-sdk/anthropic": "^4.0.1",
-    "@ai-sdk/google": "^4.0.6",
-    "@ai-sdk/openai": "^4.0.20",
+    "@ai-sdk/amazon-bedrock": "^5.0.121",
+    "@ai-sdk/anthropic": "^4.0.85",
+    "@ai-sdk/google": "^4.0.102",
+    "@ai-sdk/openai": "^4.0.99",
+    "@ai-sdk/openai-compatible": "^3.0.75",
     "@aws-sdk/credential-providers": "^3.1057.0",
     "@inquirer/prompts": "^8.5.1",
-    "ai": "^7.0.4",
+    "ai": "^7.0.148",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
     "zod": "^4.4.3"

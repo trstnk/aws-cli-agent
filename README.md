@@ -30,7 +30,7 @@ The first example is interactive — the agent runs a read-only `describe-instan
 - **Auto-approve is dangerous.** `autoApprove.readOnly: true` (the default) skips the prompt only for non-mutating commands (`describe-*`, `list-*`, `get-*`, `s3 ls`). `autoApprove.all: true` skips the prompt for **every** command — a misrouted `delete-*` or `terminate-*` can ruin your weekend or your career. Set it only in tightly scoped one-off workflows, never as a persistent default.
 - **Bash scripts are arbitrary code.** When the agent generates a bash script for multi-account or composition workflows, the script can do anything your shell can. Read it before you press execute. The "save to disk" option exists so you can review it in your editor first; use it when in doubt.
 - **Watch the bill.** Every invocation sends a prompt to your LLM provider and pays for tokens. Token totals per run are logged in `usage.log` (`cat ~/.local/state/aws-cli-agent/usage.log | jq -s 'map(.totalTokens) | add'`). Caching is on by default and cuts ~25-40% off input costs for frequent users; if you invoke `aca` rarely (once an hour or less) the cache writes don't pay back and you can set `caching: false`.
-- **Your prompts go to the model provider.** AWS CLI output is fed back to the model as part of subsequent steps. That means resource names, instance IDs, tag values, and any other data that appears in command output is transmitted to Anthropic / OpenAI / Google / Bedrock (depending on your provider choice). The provider does not retain this data beyond the request itself (and the cache TTL, ~5 minutes for cached prefixes), but **confirm this is compatible with the policies you have to respect** before pointing `aca` at sensitive accounts.
+- **Your prompts go to the model provider.** AWS CLI output is fed back to the model as part of subsequent steps. That means resource names, instance IDs, tag values, and any other data that appears in command output is transmitted to Anthropic / OpenAI / Google / Bedrock / your OpenAI-compatible endpoint (depending on your provider choice). **Confirm this is compatible with the policies you have to respect** before pointing `aca` at sensitive accounts.
 - **Provider terms apply.** When you use a provider, you agree to that provider's terms of service. For Bedrock, that's AWS's own terms (data stays in your AWS account boundary). For Anthropic / OpenAI / Google, that's their respective enterprise / API terms. Read them.
 - **Audit log is your friend.** Every executed command — including its stdout, stderr, and exit code — lands in `audit.log` (JSONL). If you ever need to reconstruct what happened, it's all there. Don't disable `logging.auditLog` unless you have a specific reason.
 - **No warranty.** **You use this agent at your own risk.** The authors are not responsible for unintended AWS API calls, deleted resources, exceeded budgets, or any other damage caused by using this tool. If you wouldn't run `aws` commands blindly from a script you found in someone's gist, don't run `aca` blindly either.
@@ -47,7 +47,8 @@ Requirements:
 - Node.js ≥ 20
 - AWS CLI v2 on `$PATH`
 - An API key for one supported provider (Anthropic / OpenAI / Google),
-  **or** AWS credentials with Bedrock model access if you choose the Bedrock provider
+  **or** AWS credentials with Bedrock model access if you choose the Bedrock provider,
+  **or** an OpenAI-compatible server such as LM Studio or Ollama (local models, usually no key)
 
 ## Setup
 
@@ -60,6 +61,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # or OPENAI_API_KEY=...
 # or GOOGLE_GENERATIVE_AI_API_KEY=...
 # (Bedrock needs no API key — uses your AWS credential chain)
+# (Local OpenAI-compatible servers like LM Studio / Ollama usually need none either)
 
 # 3. Try it
 aca list all s3 buckets in account my-staging
@@ -75,7 +77,7 @@ Default contents (created by `aca config`):
 {
   "provider": "anthropic",
   "anthropic": {
-    "model": "claude-sonnet-4-6"
+    "model": "claude-sonnet-5-5"
   },
   "maxSteps": 15,
   "logging": {
@@ -101,20 +103,20 @@ A more populated config showing all four providers (you only need the block for 
 {
   "provider": "anthropic",
   "anthropic": {
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5-5",
     "apiKey": "sk-ant-...",
     "apiKeyEnv": "MY_CUSTOM_ANTHROPIC_KEY"
   },
   "openai": {
-    "model": "gpt-5",
+    "model": "gpt-6-astra",
     "apiKey": "sk-..."
   },
   "google": {
-    "model": "gemini-2.5-pro",
+    "model": "gemini-3.6-flash",
     "apiKey": "..."
   },
   "bedrock": {
-    "model": "us.anthropic.claude-sonnet-4-6",
+    "model": "us.anthropic.claude-sonnet-5-5",
     "region": "us-east-1",
     "profile": "shared-services"
   },
@@ -123,7 +125,7 @@ A more populated config showing all four providers (you only need the block for 
 }
 ```
 
-Per-provider configuration lives in a top-level block named after the provider (`anthropic`, `openai`, `google`, `bedrock`). The active provider is selected by the top-level `provider` field, and its block must exist with at least a `model` set. All other provider blocks are ignored at runtime, but you can keep them populated if you switch providers often — `aca` won't read them until you change `provider`.
+Per-provider configuration lives in a top-level block named after the provider (`anthropic`, `openai`, `google`, `bedrock`, `openai-compatible`). The active provider is selected by the top-level `provider` field, and its block must exist with at least a `model` set. All other provider blocks are ignored at runtime, but you can keep them populated if you switch providers often — `aca` won't read them until you change `provider`.
 
 The config file is created with file mode `0600` (owner read/write only) when `aca config` runs. If you edit it manually with another tool, `aca` won't re-permission it on read — that's on you.
 
@@ -131,9 +133,10 @@ The config file is created with file mode `0600` (owner read/write only) when `a
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | `anthropic` | Active LLM provider: `anthropic` \| `openai` \| `google` \| `bedrock`. The matching top-level block must exist and contain a `model`. |
+| `provider` | `anthropic` | Active LLM provider: `anthropic` \| `openai` \| `google` \| `bedrock` \| `openai-compatible`. The matching top-level block must exist and contain a `model`. |
 | `anthropic`, `openai`, `google` | — | Per-provider blocks for the three keyed providers. See "Per-provider keys" below. |
 | `bedrock` | — | Bedrock provider block. See "Bedrock" below. |
+| `openai-compatible` | — | Block for any OpenAI-compatible server (LM Studio, Ollama, vLLM, LiteLLM, ...). See "OpenAI-compatible servers" below. |
 | `defaultRegion` | — | AWS region injected into every AWS CLI command when the agent didn't specify one |
 | `caching` | `true` | Enable prompt caching for providers that support it. See "Prompt caching" below. |
 | `maxSteps` | `15` | Hard cap on agent reasoning/tool steps per request (range 1-50) |
@@ -151,7 +154,7 @@ All three keyed providers accept the same three fields:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `<provider>.model` | yes | Model identifier (e.g. `claude-sonnet-4-6`, `gpt-5`, `gemini-2.5-pro`). Required when this provider is active. |
+| `<provider>.model` | yes | Model identifier (e.g. `claude-sonnet-5-5`, `gpt-6-astra`, `gemini-3.6-flash`). Required when this provider is active. |
 | `<provider>.apiKey` | no | API key for this provider. **SECURITY:** putting the key here persists it to disk; prefer the env var. The env var wins if both are set. |
 | `<provider>.apiKeyEnv` | no | Override the env var name read for this provider. Default names: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`. |
 
@@ -169,7 +172,7 @@ When `provider = "bedrock"`, configure model, region, and (optionally) profile i
 {
   "provider": "bedrock",
   "bedrock": {
-    "model": "us.anthropic.claude-sonnet-4-6",
+    "model": "us.anthropic.claude-sonnet-5-5",
     "region": "us-east-1",
     "profile": "shared-services"
   }
@@ -180,6 +183,53 @@ When `provider = "bedrock"`, configure model, region, and (optionally) profile i
 - **`bedrock.profile`** is independent from operational profiles. The agent calls Bedrock under `bedrock.profile`, but each AWS CLI command it issues uses its own `--profile` (resolved from the user's prompt / history). This is the right pattern when one account holds Bedrock entitlements and other accounts hold workloads.
 - If `bedrock.region` is unset, falls back to `AWS_REGION` / `AWS_DEFAULT_REGION` env vars.
 - Bedrock uses the AWS credential chain — there's no `apiKey` field.
+
+### OpenAI-compatible servers (LM Studio, Ollama, ...)
+
+`provider = "openai-compatible"` talks to any server that implements the OpenAI Chat Completions API (`POST <baseURL>/chat/completions`). That covers local runtimes like LM Studio and Ollama as well as self-hosted gateways such as vLLM or LiteLLM.
+
+LM Studio (start the server in the Developer tab, default port 1234):
+
+```json
+{
+  "provider": "openai-compatible",
+  "openai-compatible": {
+    "name": "lmstudio",
+    "baseURL": "http://localhost:1234/v1",
+    "model": "qwen2.5-coder-7b-instruct"
+  }
+}
+```
+
+Ollama (`ollama serve`, default port 11434; `ollama pull` the model first):
+
+```json
+{
+  "provider": "openai-compatible",
+  "openai-compatible": {
+    "name": "ollama",
+    "baseURL": "http://localhost:11434/v1",
+    "model": "qwen2.5-coder-7b-instruct"
+  }
+}
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `openai-compatible.model` | yes | Model identifier exactly as the server lists it (`curl <baseURL>/models`). |
+| `openai-compatible.baseURL` | yes | Endpoint base URL including the `/v1` suffix. |
+| `openai-compatible.name` | no | Label for this endpoint in logs and provider metadata. Default `openai-compatible`. |
+| `openai-compatible.apiKeyEnv` | no | Env var to read a key from, if the endpoint needs one (sent as `Authorization: Bearer ...`). There is no default env var name. |
+| `openai-compatible.apiKey` | no | Key stored in config. **SECURITY:** persists to disk; prefer `apiKeyEnv`. |
+
+If neither key field is set, requests go out without an `Authorization` header, which is what local LM Studio / Ollama servers expect.
+
+Notes:
+
+- **The model must support tool calling.** The agent works entirely through tools. Pick a model the server runs with tool/function calling enabled (e.g. recent Qwen, Llama 3.1+, Mistral, gpt-oss). Models without tool support will answer in plain text and never execute anything.
+- **Small models make more mistakes.** Everything in the warning section applies twice over. Read every `Command:` before approving it.
+- **Context window.** The system prompt plus tool definitions are ~7,000 tokens before any AWS output. Ollama's default context length is often smaller and truncates silently; raise it (e.g. `OLLAMA_CONTEXT_LENGTH=32768 ollama serve`, or the context-length setting in LM Studio).
+- **Data stays where the server is.** With a local server, prompts and AWS CLI output never leave your machine. With a remote endpoint, the warning section about data going to the model provider applies to that endpoint's operator.
 
 ### Logging
 
@@ -217,6 +267,7 @@ aca --region eu-west-1 "list ec2 instances in my-staging"
 | **Bedrock (Anthropic models)** | Cached via Bedrock's `cachePoint` API. Same economics as Anthropic-direct. Other Bedrock models (Nova, Llama) may or may not support caching depending on the underlying model. |
 | **OpenAI** | Auto-caches any prompt over 1,024 tokens; the `caching` flag is ignored (and unnecessary). |
 | **Google Gemini** | Caching API isn't wired up in this version. The `caching` flag is silently ignored. |
+| **OpenAI-compatible** | No cache markers are sent; the `caching` flag is ignored. Some servers (e.g. llama.cpp, vLLM) reuse the prompt prefix on their own. |
 
 The token counts written to `usage.log` include cache hit/miss accounting where available:
 
@@ -381,7 +432,8 @@ Run `aca paths` to see the actual resolved locations on your system.
                          ▼
    ┌────────────────────────────────────────────────────────┐
    │  LLM provider                                          │
-   │    Anthropic · OpenAI · Google · Bedrock               │
+   │    Anthropic · OpenAI · Google · Bedrock ·             │
+   │    OpenAI-compatible (LM Studio, Ollama, ...)          │
    │    prompt cache (~5 min TTL) — system prompt only      │
    └────────────────────────────────────────────────────────┘
 ```

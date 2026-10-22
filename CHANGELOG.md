@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.8.0] - 2026-10-22
+
+### Added
+
+- **OpenAI-compatible providers**: new `provider: "openai-compatible"` with a matching `openai-compatible` config block (`model`, `baseURL`, optional `name`, `apiKey`, `apiKeyEnv`). Works with any server that implements the OpenAI Chat Completions API, e.g. local models served by LM Studio or Ollama, or gateways like vLLM and LiteLLM. The API key is optional; without one, requests are sent unauthenticated. Built on `@ai-sdk/openai-compatible`.
+
+### Changed
+
+- **Dependencies**: updated the Vercel AI SDK packages to their latest releases: `ai` 7.0.148, `@ai-sdk/amazon-bedrock` 5.0.121, `@ai-sdk/anthropic` 4.0.85, `@ai-sdk/google` 4.0.102, `@ai-sdk/openai` 4.0.99, `@ai-sdk/openai-compatible` 3.0.75.
+
 ## [0.7.0] - 2026-07-30
 
 ### Changed
