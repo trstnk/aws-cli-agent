@@ -75,6 +75,22 @@ const OpenAICompatibleSchema = z
   })
   .optional();
 
+/**
+ * Reasoning levels accepted by the AI SDK's provider-neutral `reasoning`
+ * call option. Each provider maps the level to its own setting: Anthropic
+ * effort, Bedrock `maxReasoningEffort`, OpenAI `reasoning_effort`.
+ */
+export const REASONING_LEVELS = [
+  'provider-default',
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+
 export const ConfigSchema = z.object({
   /**
    * Which provider is active. The matching top-level block (anthropic /
@@ -103,6 +119,14 @@ export const ConfigSchema = z.object({
 
   /** Max reasoning/tool-use steps before the agent must conclude. */
   maxSteps: z.number().int().min(1).max(50).default(15),
+
+  /**
+   * How much the model thinks per step. `provider-default` sends nothing, so
+   * the provider's own default applies; that is the safe choice for
+   * models or local servers that reject a reasoning setting. Override
+   * per-run with --reasoning.
+   */
+  reasoning: z.enum(REASONING_LEVELS).default('provider-default'),
 
   /** All logging knobs. */
   logging: LoggingSchema,

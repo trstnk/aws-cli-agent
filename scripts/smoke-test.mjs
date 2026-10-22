@@ -156,6 +156,14 @@ async function main() {
     assert(shortForm.status === 0, `-i: exit ${shortForm.status}, stderr=${shortForm.stderr}`);
   });
 
+  await check('--reasoning accepts known levels and rejects others', () => {
+    const ok = runCli(['--reasoning', 'medium', '--help']);
+    assert(ok.status === 0, `--reasoning medium: exit ${ok.status}, stderr=${ok.stderr}`);
+    // Not combined with --help, which commander handles before validating.
+    const bad = runCli(['--reasoning', 'extreme', 'paths']);
+    assert(bad.status !== 0, '--reasoning extreme was accepted');
+  });
+
   await check('--quiet flag is rejected (removed in 0.3.0)', () => {
     // Don't combine with --help: commander processes --help first and returns 0
     // before validating other options. Pass --quiet alone.

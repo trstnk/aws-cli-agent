@@ -140,6 +140,7 @@ The config file is created with file mode `0600` (owner read/write only) when `a
 | `defaultRegion` | — | AWS region injected into every AWS CLI command when the agent didn't specify one |
 | `caching` | `true` | Enable prompt caching for providers that support it. See "Prompt caching" below. |
 | `maxSteps` | `15` | Hard cap on agent reasoning/tool steps per request (range 1-50) |
+| `reasoning` | `provider-default` | How much the model thinks per step: `provider-default` \| `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. See "Reasoning effort" below. |
 | `logging` | see below | All logging knobs |
 | `verbose` | `false` | Echo agent reasoning to the console as it runs |
 | `autoApprove.readOnly` | `true` | Skip prompt for read-only AWS CLI commands (`describe-*` / `list-*` / `get-*` / `s3 ls`) |
@@ -251,6 +252,18 @@ Notes:
 | `logging.reasoningLog` | `false` | Write `reasoning.log` — text record of agent reasoning steps and tool calls. |
 | `logging.usageLog` | `true` | Write `usage.log` — one JSONL entry per `aca` invocation with token totals (input + completion + total + cache hit/miss). |
 
+### Reasoning effort
+
+`reasoning` sets how much the model thinks before each step, using the AI SDK's provider-neutral `reasoning` option. Each provider translates it to its own setting:
+
+| Provider | Sent for `"medium"` |
+|---|---|
+| `anthropic` | adaptive thinking with `effort: "medium"` (on newer Claude models; older ones get a thinking budget) |
+| `bedrock` (Claude models) | adaptive thinking with `maxReasoningEffort: "medium"` |
+| `openai`, `openai-compatible` | `reasoning_effort: "medium"` |
+
+The default, `provider-default`, sends nothing, so each model runs at its provider's default. Keep it for models or local servers that reject a reasoning setting. For Claude Sonnet 5.5, `medium` is a good starting point for multi-step tool use: Anthropic reports it usually finishes in fewer steps and costs less than the provider default (`high`). Override per run with `--reasoning <level>`.
+
 ### `defaultRegion` and `--region`
 
 If `defaultRegion` is set, `aca` appends `--region <value>` to every AWS CLI command the agent runs — **only when the agent didn't already specify a region itself**. The agent's choice (driven by the user's prompt or history) always wins. Override per run with `--region`.
@@ -335,6 +348,8 @@ Options:
   -i, --interactive        force AWS CLI commands to inherit your terminal
                            (for shells, port-forwards, log tails — common
                            patterns auto-detect; this is the manual override)
+  --reasoning <level>      override reasoning for this run: provider-default |
+                           none | minimal | low | medium | high | xhigh | max
 
 Commands:
   run <request...>         (default) execute a natural-language request
