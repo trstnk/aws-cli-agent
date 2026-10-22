@@ -184,6 +184,7 @@ async function main() {
         verbose: false,
         autoApprove: { readOnly: true, all: false },
         historyLimit: 0,
+        docs: { enabled: false, url: 'https://knowledge-mcp.global.api.aws' },
       },
       history: { search: () => [], recent: () => [], append: () => {} },
       audit: new AuditLogger(false),
@@ -201,6 +202,30 @@ async function main() {
       });
       assert(r.success, `prompt_user rejected valid kind=${kind}`);
     }
+  });
+
+  await check('search_aws_docs registers only when docs.enabled', async () => {
+    // Building the tool must not touch the network — the MCP client is only
+    // created inside execute().
+    const { createTools } = await import(`file://${path.join(distDir, 'tools/index.js')}`);
+    const { Logger } = await import(`file://${path.join(distDir, 'logger.js')}`);
+    const { AuditLogger } = await import(`file://${path.join(distDir, 'audit.js')}`);
+    const { ConfigSchema } = await import(`file://${path.join(distDir, 'config.js')}`);
+    const build = (docs) =>
+      createTools({
+        logger: new Logger('silent'),
+        config: ConfigSchema.parse(docs === undefined ? {} : { docs }),
+        history: { search: () => [], recent: () => [], append: () => {} },
+        audit: new AuditLogger(false),
+        record: () => {},
+      });
+    const tools = build(undefined);
+    assert('search_aws_docs' in tools, 'search_aws_docs missing with default config');
+    for (const input of [{ action: 'search', query: 'q' }, { action: 'read', url: 'https://docs.aws.amazon.com/x' }]) {
+      const r = tools.search_aws_docs.inputSchema.safeParse(input);
+      assert(r.success, `search_aws_docs rejected valid input ${JSON.stringify(input)}`);
+    }
+    assert(!('search_aws_docs' in build({ enabled: false })), 'search_aws_docs registered while disabled');
   });
 
   await check('openai-compatible provider validates and builds without a key', async () => {

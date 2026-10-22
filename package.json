@@ -53,6 +53,7 @@
     "@ai-sdk/amazon-bedrock": "^5.0.121",
     "@ai-sdk/anthropic": "^4.0.85",
     "@ai-sdk/google": "^4.0.102",
+    "@ai-sdk/mcp": "^2.0.81",
     "@ai-sdk/openai": "^4.0.99",
     "@ai-sdk/openai-compatible": "^3.0.75",
     "@aws-sdk/credential-providers": "^3.1057.0",

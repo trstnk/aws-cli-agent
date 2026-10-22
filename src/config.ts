@@ -127,7 +127,10 @@ export const ConfigSchema = z.object({
     .object({
       /** Auto-approve read-only AWS commands (describe-*, list-*, get-*, s3 ls). */
       readOnly: z.boolean().default(true),
-      /** Auto-approve every command and script. Dangerous. */
+      /**
+       * Auto-approve every command and docs lookup. Dangerous. (Scripts
+       * always prompt; `readOnly` does not cover docs lookups.)
+       */
       all: z.boolean().default(false),
     })
     .default({ readOnly: true, all: false }),
@@ -147,6 +150,18 @@ export const ConfigSchema = z.object({
    * $XDG_DATA_HOME/aws-cli-agent/scripts.
    */
   scriptFolder: z.string().optional(),
+
+  /**
+   * AWS documentation lookup via the AWS Knowledge MCP server. The agent
+   * uses it only when the right CLI command isn't obvious. Search phrases
+   * are sent to the server, so set `enabled: false` if that's not acceptable.
+   */
+  docs: z
+    .object({
+      enabled: z.boolean().default(true),
+      url: z.url().default('https://knowledge-mcp.global.api.aws'),
+    })
+    .default({ enabled: true, url: 'https://knowledge-mcp.global.api.aws' }),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

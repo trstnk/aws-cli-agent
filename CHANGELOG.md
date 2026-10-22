@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **AWS documentation lookup**: new `search_aws_docs` tool backed by the [AWS Knowledge MCP server](https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server) (`https://knowledge-mcp.global.api.aws`, public, no credentials). With `action: "search"` it returns ranked excerpts from the CLI reference and CLI code examples. Language-SDK pages (boto3, botocore, Kotlin, ...) and AWS CLI v1 duplicates are filtered out when CLI pages are available. With `action: "read"` it fetches a page as markdown, 8,000 characters at a time. The system prompt and tool description restrict it to cases where the correct command is not obvious, and say it must never be used to answer general AWS questions. Its output is treated as untrusted data, like the other tools' output. Lookups fail soft: if the server is unreachable, the tool reports an error and the agent carries on without it.
+- **Config**: new `docs` block (`enabled`, default `true`; `url`, default the AWS Knowledge MCP endpoint). With `enabled: false` the tool isn't registered. Each lookup asks for approval first, showing the search phrase or URL and the server it goes to. Declining makes the agent continue without the docs. `autoApprove.all: true` or the `--auto-approve` flag skips the prompt; `autoApprove.readOnly` doesn't.
+
+### Changed
+
+- **Dependencies**: added `@ai-sdk/mcp` 2.0.81 (MCP client over Streamable HTTP).
+
 ## [0.8.0] - 2026-10-22
 
 ### Added

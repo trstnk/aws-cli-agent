@@ -64,7 +64,7 @@ export async function main(argv: string[]): Promise<void> {
     )
     .option(
       '--auto-approve',
-      'auto-approve all commands and scripts for this run (use with care)',
+      'auto-approve all commands, scripts, and docs lookups for this run (use with care)',
     )
     .option('--profile <name>', 'hint the agent to use this AWS profile')
     .option(
