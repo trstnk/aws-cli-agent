@@ -56,14 +56,33 @@ const BedrockSchema = z
   })
   .optional();
 
+/**
+ * Any server that speaks the OpenAI Chat Completions API — local runtimes
+ * like LM Studio (`http://localhost:1234/v1`) or Ollama
+ * (`http://localhost:11434/v1`), or self-hosted gateways (vLLM, LiteLLM).
+ * `baseURL` is required when this provider is active; the API key is
+ * optional because most local servers don't check one. There is no default
+ * env var name — set `apiKeyEnv` if the endpoint needs a key.
+ */
+const OpenAICompatibleSchema = z
+  .object({
+    model: z.string().optional(),
+    baseURL: z.url().optional(),
+    /** Label used in logs and provider metadata. */
+    name: z.string().default('openai-compatible'),
+    apiKey: z.string().optional(),
+    apiKeyEnv: z.string().optional(),
+  })
+  .optional();
+
 export const ConfigSchema = z.object({
   /**
    * Which provider is active. The matching top-level block (anthropic /
-   * openai / google / bedrock) must exist and contain a `model`. Use
+   * openai / google / bedrock / openai-compatible) must exist and contain a `model`. Use
    * `aca config` to see a working default scaffold.
    */
   provider: z
-    .enum(['anthropic', 'openai', 'google', 'bedrock'])
+    .enum(['anthropic', 'openai', 'google', 'bedrock', 'openai-compatible'])
     .default('anthropic'),
 
   // Per-provider blocks. Each is independently optional; the active
@@ -72,6 +91,7 @@ export const ConfigSchema = z.object({
   openai: KeyedProviderSchema,
   google: KeyedProviderSchema,
   bedrock: BedrockSchema,
+  'openai-compatible': OpenAICompatibleSchema,
 
   /**
    * Default AWS region for AWS CLI commands the agent executes. Used when
@@ -141,6 +161,7 @@ const PROVIDER_LABELS = {
   openai: 'openai',
   google: 'google',
   bedrock: 'bedrock',
+  'openai-compatible': 'openai-compatible',
 } as const;
 
 /**
@@ -179,7 +200,14 @@ export function validateActiveProvider(config: Config): void {
   if (!block.model) {
     throw new Error(
       `config.${active}.model is required. Set it to the model identifier you ` +
-        `want to use (e.g. "claude-sonnet-4-6" for anthropic).`,
+        `want to use (e.g. "claude-sonnet-5-5" for anthropic).`,
+    );
+  }
+  if (active === 'openai-compatible' && !config['openai-compatible']?.baseURL) {
+    throw new Error(
+      `config.openai-compatible.baseURL is required. Set it to the server's ` +
+        `OpenAI-compatible endpoint (e.g. "http://localhost:1234/v1" for LM Studio, ` +
+        `"http://localhost:11434/v1" for Ollama).`,
     );
   }
 }
@@ -250,7 +278,19 @@ export function writeDefaultConfig(): string {
   if (!fs.existsSync(FILES.config)) {
     const defaults = {
       provider: 'anthropic' as const,
-      anthropic: { model: 'claude-sonnet-4-6' },
+      anthropic: {
+        model: 'claude-sonnet-5-5' as const,
+      },
+      bedrock: {
+        model: 'eu.anthropic.claude-sonnet-5-5' as const,
+        region: 'eu-central-1' as const,
+        profile: 'my-bedrock-profile' as const,
+      },
+      'openai-compatible': {
+        name: 'qwen2.5-coder' as const,
+        model: 'qwen2.5-coder-7b-instruct' as const,
+        baseURL: 'http://localhost:1234/v1' as const,
+      },
       maxSteps: 15,
       logging: {
         level: 'error' as const,
@@ -260,7 +300,10 @@ export function writeDefaultConfig(): string {
       },
       caching: true,
       verbose: false,
-      autoApprove: { readOnly: true, all: false },
+      autoApprove: {
+        readOnly: true,
+        all: false
+      },
       forceInteractive: false,
       historyLimit: 200,
     };

@@ -1,6 +1,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import type { LanguageModel } from 'ai';
@@ -25,6 +26,7 @@ const DEFAULT_KEY_ENV = {
  *   config.openai.{model, apiKey, apiKeyEnv}
  *   config.google.{model, apiKey, apiKeyEnv}
  *   config.bedrock.{model, region, profile}
+ *   config['openai-compatible'].{model, baseURL, name, apiKey, apiKeyEnv}
  *
  * For anthropic / openai / google, API key resolution order (per-provider):
  *   1. Env var named by `<provider>.apiKeyEnv` if set in config
@@ -37,6 +39,10 @@ const DEFAULT_KEY_ENV = {
  * optionally pins a specific named profile — useful when the account hosting
  * Bedrock model access is different from the accounts the agent operates
  * against.
+ *
+ * For openai-compatible (LM Studio, Ollama, vLLM, LiteLLM, ...): the key is
+ * optional, since local servers usually don't check one. Resolution is
+ * `apiKeyEnv` env var, then `apiKey` from config, then no key at all.
  *
  * The `logger` parameter is used to emit a debug-level note when the key
  * resolves from config instead of env, so an investigator can see "this run
@@ -73,7 +79,50 @@ export function createModel(config: Config, logger?: Logger): LanguageModel {
         : fromNodeProviderChain();
       return createAmazonBedrock({ region, credentialProvider })(block.model!);
     }
+    case 'openai-compatible': {
+      const block = config['openai-compatible']!;
+      const apiKey = optionalKey(block.apiKey, block.apiKeyEnv, logger);
+      return createOpenAICompatible({
+        name: block.name,
+        baseURL: block.baseURL!, // validated upstream
+        apiKey,
+        // Ask the server to report token usage on streamed responses so
+        // usage.log has real numbers. Servers that ignore it just report 0.
+        includeUsage: true,
+      })(block.model!);
+    }
   }
+}
+
+/**
+ * Key resolution for openai-compatible endpoints. Unlike `requireKey`, a
+ * missing key is not an error and there's no default env var name: a local
+ * LM Studio or Ollama server accepts unauthenticated requests.
+ */
+function optionalKey(
+  configKey: string | undefined,
+  configKeyEnv: string | undefined,
+  logger: Logger | undefined,
+): string | undefined {
+  if (configKeyEnv) {
+    const v = process.env[configKeyEnv];
+    if (v) return v;
+    process.stderr.write(
+      `Warning: config.openai-compatible.apiKeyEnv names "${configKeyEnv}" but ` +
+        `that environment variable is not set. Falling back to ` +
+        `config.openai-compatible.apiKey, or no key.\n`,
+    );
+    logger?.warn(
+      `openai-compatible: configured apiKeyEnv "${configKeyEnv}" is not set in the environment.`,
+    );
+  }
+  if (configKey) {
+    logger?.debug(
+      'openai-compatible: API key loaded from config file (no env var set).',
+    );
+    return configKey;
+  }
+  return undefined;
 }
 
 /**

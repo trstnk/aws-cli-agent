@@ -112,7 +112,9 @@ export async function runAgent(opts: {
   // support an explicit `cacheControl` / `cachePoint` marker on the system
   // message — see `systemMessageProviderOptions` below. OpenAI auto-caches
   // prompts over 1,024 tokens with no opt-in needed; Google Gemini's caching
-  // API is structurally different and not wired up. If caching=false in
+  // API is structurally different and not wired up. OpenAI-compatible servers
+  // (LM Studio, Ollama, ...) get no markers either — any caching there is the
+  // server's own business. If caching=false in
   // config, we don't send markers anywhere.
   //
   // Note: only the system message gets cached. Marking individual tool
