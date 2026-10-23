@@ -192,7 +192,7 @@ async function main() {
         verbose: false,
         autoApprove: { readOnly: true, all: false },
         historyLimit: 0,
-        docs: { enabled: false, url: 'https://knowledge-mcp.global.api.aws' },
+        docs: { enabled: false, url: 'https://aws-mcp.eu-central-1.api.aws/mcp' },
       },
       history: { search: () => [], recent: () => [], append: () => {} },
       audit: new AuditLogger(false),
@@ -212,7 +212,7 @@ async function main() {
     }
   });
 
-  await check('search_aws_docs registers only when docs.enabled', async () => {
+  await check('docs tools register only when docs.enabled', async () => {
     // Building the tool must not touch the network — the MCP client is only
     // created inside execute().
     const { createTools } = await import(`file://${path.join(distDir, 'tools/index.js')}`);
@@ -228,12 +228,17 @@ async function main() {
         record: () => {},
       });
     const tools = build(undefined);
-    assert('search_aws_docs' in tools, 'search_aws_docs missing with default config');
-    for (const input of [{ action: 'search', query: 'q' }, { action: 'read', url: 'https://docs.aws.amazon.com/x' }]) {
-      const r = tools.search_aws_docs.inputSchema.safeParse(input);
-      assert(r.success, `search_aws_docs rejected valid input ${JSON.stringify(input)}`);
+    const disabled = build({ enabled: false });
+    const cases = {
+      search_aws_documentation: { query: 'q' },
+      read_aws_documentation: { url: 'https://docs.aws.amazon.com/x' },
+    };
+    for (const [name, input] of Object.entries(cases)) {
+      assert(name in tools, `${name} missing with default config`);
+      const r = tools[name].inputSchema.safeParse(input);
+      assert(r.success, `${name} rejected valid input ${JSON.stringify(input)}`);
+      assert(!(name in disabled), `${name} registered while disabled`);
     }
-    assert(!('search_aws_docs' in build({ enabled: false })), 'search_aws_docs registered while disabled');
   });
 
   await check('openai-compatible provider validates and builds without a key', async () => {

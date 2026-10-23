@@ -176,16 +176,18 @@ export const ConfigSchema = z.object({
   scriptFolder: z.string().optional(),
 
   /**
-   * AWS documentation lookup via the AWS Knowledge MCP server. The agent
+   * AWS documentation lookup via the AWS MCP Server. The agent
    * uses it only when the right CLI command isn't obvious. Search phrases
    * are sent to the server, so set `enabled: false` if that's not acceptable.
+   * `url` defaults to the eu-central-1 endpoint; endpoints for other regions
+   * are listed in the AWS Agent Toolkit user guide.
    */
   docs: z
     .object({
       enabled: z.boolean().default(true),
-      url: z.url().default('https://knowledge-mcp.global.api.aws'),
+      url: z.url().default('https://aws-mcp.eu-central-1.api.aws/mcp'),
     })
-    .default({ enabled: true, url: 'https://knowledge-mcp.global.api.aws' }),
+    .default({ enabled: true, url: 'https://aws-mcp.eu-central-1.api.aws/mcp' }),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

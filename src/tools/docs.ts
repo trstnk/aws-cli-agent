@@ -5,6 +5,7 @@ import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
+import type { AuditLogger } from '../audit.js';
 import { UserCancelledError, wrapPrompt } from '../errors.js';
 
 /** Per-request timeout for the MCP server (initialize + tool call each). */
@@ -32,7 +33,7 @@ const NON_CLI_URL =
 
 /**
  * Pull the text parts out of an MCP tool result and JSON-parse them. The
- * AWS Knowledge server wraps its payload as `{ content: { result: [...] } }`
+ * AWS MCP Server wraps its payload as `{ content: { result: [...] } }`
  * inside a single text part, and reports failures as `{ errorMessage }`.
  * `items` is null when the shape is unexpected so the caller can fall back
  * to the raw text.
@@ -71,7 +72,7 @@ function parseResult(raw: unknown): {
  * cheaper in complexity than threading a client lifecycle through the agent
  * loop — and nothing is left open to keep the process alive after the run.
  */
-async function callKnowledgeServer(
+async function callDocsServer(
   url: string,
   name: string,
   args: Record<string, unknown>,
@@ -91,7 +92,7 @@ async function callKnowledgeServer(
 }
 
 /**
- * Show what is about to be sent to the Knowledge server and ask the user to
+ * Show what is about to be sent to the AWS MCP Server and ask the user to
  * allow it. Unlike AWS CLI calls, a lookup can't change anything — the gate
  * exists because the query text leaves the machine, so the user gets to
  * check it for account IDs, resource names, or other data before it does.
@@ -122,70 +123,106 @@ const DECLINED = {
   error: 'User declined the documentation lookup. Continue without it; do not retry the same lookup.',
 };
 
-export function awsDocsTool(opts: { logger: Logger; config: Config }): Tool {
-  const url = opts.config.docs.url;
+type DocsToolOpts = { logger: Logger; config: Config; audit: AuditLogger };
+
+/**
+ * Run one lookup: ask for approval, call the server, and turn any thrown
+ * error into a soft failure. `call` gets the server URL and returns the
+ * tool result. Every outcome (declined, failed, succeeded) is audited
+ * with the `input` sent and the result the model gets.
+ */
+async function lookup(
+  opts: DocsToolOpts,
+  label: string,
+  value: string,
+  kind: 'search' | 'read',
+  input: Record<string, unknown>,
+  call: (url: string) => Promise<Record<string, unknown>>,
+): Promise<Record<string, unknown>> {
+  const server = opts.config.docs.url;
+  let result: Record<string, unknown>;
+  try {
+    if (!(await approveLookup(opts, label, value))) {
+      opts.logger.warn(`User declined docs ${kind}`);
+      result = DECLINED;
+    } else {
+      opts.logger.info(`AWS docs ${kind}: ${value}`);
+      result = await call(server);
+    }
+  } catch (err) {
+    // Ctrl-C at the approval prompt must end the run, not become a
+    // soft lookup failure.
+    if (err instanceof UserCancelledError) throw err;
+    // Soft failure: the docs are a convenience. The model can still build
+    // the command from its own knowledge or ask the user.
+    const msg = err instanceof Error ? err.message : String(err);
+    opts.logger.warn(`AWS docs lookup failed: ${msg}`);
+    result = { ok: false, error: `Documentation lookup failed: ${msg}` };
+  }
+  opts.audit.logDocs({ type: `docs_${kind}`, server, input, ok: result.ok === true, result });
+  return result;
+}
+
+/** Shared tail of both tool descriptions: data leaves the machine. */
+const PRIVACY_NOTE =
+  'Lookups are sent to an external AWS service (AWS MCP Server) and may need user approval first: never put account IDs, resource names, ARNs, or other user data in a lookup. If the user declines, continue without the docs.';
+
+export function searchAwsDocsTool(opts: DocsToolOpts): Tool {
   return tool({
     description:
-      'Search and read official AWS documentation (AWS Knowledge MCP server). Use it only when the correct AWS CLI command is not obvious: you are unsure which service or subcommand covers the task, unsure of exact flag names, required parameters, or the JSON shape of a structured argument (e.g. --cli-input-json, --filters, lifecycle or policy documents), or a CLI error needs explaining. Skip it for commands you already know; each lookup usually needs the user\'s approval and adds a round trip. It is not for answering general AWS questions. ' +
-      'action="search" with `query` returns ranked page chunks (title, url, verbatim text) that usually already contain the answer. action="read" with `url` returns the page as markdown: use an exact URL from a search result, or the CLI reference page https://docs.aws.amazon.com/cli/latest/reference/<service>/<command>.html (synopsis, options, examples) when you know the command but not its flags; continue a truncated page with `startIndex` = the returned `endIndex`. ' +
-      'Queries are sent to an external AWS service and may need user approval first: never put account IDs, resource names, ARNs, or other user data in `query`. If the user declines, continue without the docs.',
+      'Search official AWS documentation. Use it only when the correct AWS CLI command is not obvious: you are unsure which service or subcommand covers the task, unsure of exact flag names, required parameters, or the JSON shape of a structured argument (e.g. --cli-input-json, --filters, lifecycle or policy documents), or a CLI error needs explaining. Skip it for commands you already know; each lookup usually needs the user\'s approval and adds a round trip. It is not for answering general AWS questions. ' +
+      'Returns ranked page chunks (title, url, verbatim text) that usually already contain the answer; use read_aws_documentation only when they don\'t. ' +
+      PRIVACY_NOTE,
     inputSchema: z.object({
-      action: z.enum(['search', 'read']).describe('search = find relevant doc chunks; read = fetch one page.'),
       query: z
         .string()
-        .optional()
-        .describe('Required for search. Keywords, e.g. "aws cli ec2 describe-instances filter by tag". Preserve exact error strings verbatim.'),
-      url: z.string().optional().describe('Required for read. Exact doc URL from a search result.'),
+        .describe('Keywords, e.g. "aws cli ec2 describe-instances filter by tag". Preserve exact error strings verbatim.'),
+    }),
+    execute: ({ query }) =>
+      lookup(opts, 'Docs search: ', query, 'search', { query }, async (url) => {
+        const raw = await callDocsServer(url, 'aws___search_documentation', {
+          search_phrase: query,
+          // CLI reference pages and code examples live under this topic.
+          topics: ['reference_documentation'],
+          // Over-fetch so there is something left after dropping SDK noise.
+          limit: 8,
+        });
+        const { items, text, error } = parseResult(raw);
+        if (error) return { ok: false, error: `Documentation search failed: ${truncate(error, 1_000)}` };
+        if (!items) return { ok: true, raw: truncate(text) };
+        // Drop "skill" entries (guided workflows for the server's own
+        // retrieve_skill tool) — they carry no page text we can use.
+        const pages = items.filter((r) => typeof r.context === 'string');
+        const cliPages = pages.filter((r) => !NON_CLI_URL.test(String(r.url)));
+        // If filtering leaves nothing, SDK pages still beat no answer: the
+        // parameter names and shapes match the CLI's.
+        const results = (cliPages.length > 0 ? cliPages : pages)
+          .slice(0, 4)
+          .map((r) => ({ title: r.title, url: r.url, context: truncate(r.context as string, 4_000) }));
+        opts.logger.debug(`AWS docs search returned ${results.length} result(s)`);
+        return { ok: true, results };
+      }),
+  });
+}
+
+export function readAwsDocsTool(opts: DocsToolOpts): Tool {
+  return tool({
+    description:
+      'Read one page of official AWS documentation as markdown. Use an exact URL from a search_aws_documentation result, or the CLI reference page https://docs.aws.amazon.com/cli/latest/reference/<service>/<command>.html (synopsis, options, examples) when you know the command but not its flags. Same restriction as the search: only when the correct AWS CLI command is not obvious, never for general AWS questions. ' +
+      'Pages are returned in parts; continue a truncated page with `startIndex` = the returned `endIndex`. ' +
+      PRIVACY_NOTE,
+    inputSchema: z.object({
+      url: z.string().describe('Exact doc URL, e.g. from a search result.'),
       startIndex: z
         .number()
         .int()
         .min(0)
         .optional()
-        .describe('read only: character offset to continue from (previous endIndex).'),
+        .describe('Character offset to continue from (previous endIndex).'),
     }),
-    execute: async ({ action, query, url: docUrl, startIndex }) => {
-      try {
-        if (action === 'search') {
-          if (!query) return { ok: false, error: 'action="search" requires `query`.' };
-          if (!(await approveLookup(opts, 'Docs search: ', query))) {
-            opts.logger.warn('User declined docs search');
-            return DECLINED;
-          }
-          opts.logger.info(`AWS docs search: ${query}`);
-          const raw = await callKnowledgeServer(url, 'aws___search_documentation', {
-            search_phrase: query,
-            // CLI reference pages and code examples live under this topic.
-            topics: ['reference_documentation'],
-            // Over-fetch so there is something left after dropping SDK noise.
-            limit: 8,
-          });
-          const { items, text, error } = parseResult(raw);
-          if (error) return { ok: false, error: `Documentation search failed: ${truncate(error, 1_000)}` };
-          if (!items) return { ok: true, raw: truncate(text) };
-          // Drop "skill" entries (guided workflows for the server's own
-          // retrieve_skill tool) — they carry no page text we can use.
-          const pages = items.filter((r) => typeof r.context === 'string');
-          const cliPages = pages.filter((r) => !NON_CLI_URL.test(String(r.url)));
-          // If filtering leaves nothing, SDK pages still beat no answer: the
-          // parameter names and shapes match the CLI's.
-          const results = (cliPages.length > 0 ? cliPages : pages)
-            .slice(0, 4)
-            .map((r) => ({ title: r.title, url: r.url, context: truncate(r.context as string, 4_000) }));
-          opts.logger.debug(`AWS docs search returned ${results.length} result(s)`);
-          return { ok: true, results };
-        }
-
-        // The schema only admits search/read, but don't let an unexpected
-        // value fall through to a read call.
-        if (action !== 'read') return { ok: false, error: `Unknown action "${String(action)}".` };
-
-        if (!docUrl) return { ok: false, error: 'action="read" requires `url`.' };
-        if (!(await approveLookup(opts, 'Docs read:   ', docUrl))) {
-          opts.logger.warn('User declined docs read');
-          return DECLINED;
-        }
-        opts.logger.info(`AWS docs read: ${docUrl}`);
-        const raw = await callKnowledgeServer(url, 'aws___read_documentation', {
+    execute: ({ url: docUrl, startIndex }) =>
+      lookup(opts, 'Docs read:   ', docUrl, 'read', { url: docUrl, startIndex: startIndex ?? 0 }, async (url) => {
+        const raw = await callDocsServer(url, 'aws___read_documentation', {
           requests: [{ url: docUrl, max_length: MAX_READ_LENGTH, start_index: startIndex ?? 0 }],
         });
         const { items, text, error } = parseResult(raw);
@@ -203,16 +240,6 @@ export function awsDocsTool(opts: { logger: Logger; config: Config }): Tool {
           endIndex: page.end_index,
           truncated: page.truncated,
         };
-      } catch (err) {
-        // Ctrl-C at the approval prompt must end the run, not become a
-        // soft lookup failure.
-        if (err instanceof UserCancelledError) throw err;
-        // Soft failure: the docs are a convenience. The model can still build
-        // the command from its own knowledge or ask the user.
-        const msg = err instanceof Error ? err.message : String(err);
-        opts.logger.warn(`AWS docs lookup failed: ${msg}`);
-        return { ok: false, error: `Documentation lookup failed: ${msg}` };
-      }
-    },
+      }),
   });
 }

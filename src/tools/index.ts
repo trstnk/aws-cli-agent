@@ -3,7 +3,7 @@ import { bashScriptTool } from './bash.js';
 import { listProfilesTool } from './profiles.js';
 import { historyTool } from './history.js';
 import { promptUserTool, promptUserMultiTool } from './prompt.js';
-import { awsDocsTool } from './docs.js';
+import { searchAwsDocsTool, readAwsDocsTool } from './docs.js';
 import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
 import type { History } from '../history.js';
@@ -62,10 +62,13 @@ export function createTools(ctx: ToolContext) {
       audit: ctx.audit,
       record: ctx.record,
     }),
-    // Only registered when enabled, so a disabled docs tool costs no
-    // tool-definition tokens and the model can't call it.
+    // Only registered when enabled, so disabled docs tools cost no
+    // tool-definition tokens and the model can't call them.
     ...(ctx.config.docs.enabled
-      ? { search_aws_docs: awsDocsTool({ logger: ctx.logger, config: ctx.config }) }
+      ? {
+          search_aws_documentation: searchAwsDocsTool({ logger: ctx.logger, config: ctx.config, audit: ctx.audit }),
+          read_aws_documentation: readAwsDocsTool({ logger: ctx.logger, config: ctx.config, audit: ctx.audit }),
+        }
       : {}),
   };
 }

@@ -148,8 +148,8 @@ The config file is created with file mode `0600` (owner read/write only) when `a
 | `forceInteractive` | `false` | Run every AWS CLI command with inherited stdio. Persistent equivalent of `--interactive`/`-i`. Almost always leave unset and use the CLI flag for one-offs. |
 | `historyLimit` | `200` | Max history entries kept in memory for context |
 | `scriptFolder` | `$XDG_DATA_HOME/aws-cli-agent/scripts` | Where saved bash scripts are written |
-| `docs.enabled` | `true` | Give the agent the `search_aws_docs` tool. See "AWS documentation lookup" below. |
-| `docs.url` | `https://knowledge-mcp.global.api.aws` | Endpoint of the AWS Knowledge MCP server |
+| `docs.enabled` | `true` | Give the agent the `search_aws_documentation` and `read_aws_documentation` tools. See "AWS documentation lookup" below. |
+| `docs.url` | `https://aws-mcp.eu-central-1.api.aws/mcp` | Endpoint of the AWS MCP Server (eu-central-1). For other regions see the [AWS Agent Toolkit documentation](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html). |
 
 ### Per-provider keys (anthropic, openai, google)
 
@@ -248,7 +248,7 @@ Notes:
 | Key | Default | Meaning |
 |---|---|---|
 | `logging.level` | `error` | General-log verbosity: `silent` \| `error` \| `warn` \| `info` \| `debug` \| `trace`. Override per run with `--log-level`. |
-| `logging.auditLog` | `true` | Write `audit.log` — JSONL trail of every executed command/script with full stdout/stderr/exit code. Bash scripts also log full source. |
+| `logging.auditLog` | `true` | Write `audit.log` — JSONL trail of every executed command/script with full stdout/stderr/exit code. Bash scripts also log full source. Documentation searches and reads are logged with the server, the query or URL sent, and the result returned to the agent. |
 | `logging.reasoningLog` | `false` | Write `reasoning.log` — text record of agent reasoning steps and tool calls. |
 | `logging.usageLog` | `true` | Write `usage.log` — one JSONL entry per `aca` invocation with token totals (input + completion + total + cache hit/miss). |
 
@@ -319,19 +319,19 @@ The prompt is **always** shown for scripts, even when `autoApprove.all` is on. S
 
 ### AWS documentation lookup
 
-When the right command isn't obvious — an unfamiliar subcommand, unsure flag names or required parameters, the JSON shape of a structured argument, or a CLI error it can't explain — the agent can look it up with the `search_aws_docs` tool. It queries the [AWS Knowledge MCP server](https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server), a public, AWS-managed endpoint that needs no AWS account or credentials. The agent can search the documentation (results are verbatim page excerpts) and read a page, usually the CLI reference for the command (`docs.aws.amazon.com/cli/latest/reference/<service>/<command>.html`). For commands the model already knows, it skips the lookup.
+When the right command isn't obvious — an unfamiliar subcommand, unsure flag names or required parameters, the JSON shape of a structured argument, or a CLI error it can't explain — the agent can look it up with the `search_aws_documentation` and `read_aws_documentation` tools. It queries the [AWS MCP Server](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html), an AWS-managed endpoint whose documentation tools are public and need no AWS account or credentials. The default endpoint is in eu-central-1 (Frankfurt). To use another region, set `docs.url` to that region's endpoint; the list of endpoints is in the [AWS Agent Toolkit documentation](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html). The agent can search the documentation (results are verbatim page excerpts) and read a page, usually the CLI reference for the command (`docs.aws.amazon.com/cli/latest/reference/<service>/<command>.html`). For commands the model already knows, it skips the lookup.
 
 Before a lookup is sent, `aca` shows the search phrase or page URL and the server it goes to, and asks for approval:
 
 ```
   Docs search: aws cli s3api put-bucket-lifecycle-configuration noncurrent version expiration
-  Sent to: https://knowledge-mcp.global.api.aws
+  Sent to: https://aws-mcp.eu-central-1.api.aws/mcp
 ? Send this AWS documentation lookup? (Y/n)
 ```
 
-If you decline, the agent continues without the docs. Lookups can't change anything, so the prompt is there to let you check what leaves your machine. Set `autoApprove.all: true`, or pass `--auto-approve` for one run, to skip it. `autoApprove.readOnly` doesn't cover lookups. If the server can't be reached, the agent builds the command without it.
+If you decline, the agent continues without the docs. Lookups can't change anything, so the prompt is there to let you check what leaves your machine. Set `autoApprove.all: true`, or pass `--auto-approve` for one run, to skip it. `autoApprove.readOnly` doesn't cover lookups. If the server can't be reached, the agent builds the command without it. Every lookup, including declined and failed ones, is written to `audit.log` (`type: "docs_search"` or `"docs_read"`) with the server, the query or URL, and the result the agent got back.
 
-**Privacy:** search phrases and page URLs are sent to the AWS Knowledge MCP server. The agent is told never to include account IDs, resource names, or ARNs in a query, but if no request data may leave your machine except to your LLM provider, set `"docs": { "enabled": false }`. When it's disabled, the tool isn't registered at all.
+**Privacy:** search phrases and page URLs are sent to the AWS MCP Server. The agent is told never to include account IDs, resource names, or ARNs in a query, but if no request data may leave your machine except to your LLM provider, set `"docs": { "enabled": false }`. When it's disabled, neither tool is registered.
 
 ## CLI options
 
@@ -405,7 +405,7 @@ State directory contents:
 ~/.local/state/aws-cli-agent/
 ├── history.jsonl       # past requests, for context
 ├── general.log         # general operational log
-├── audit.log           # JSONL audit trail of every executed command
+├── audit.log           # JSONL audit trail of every executed command and docs lookup
 ├── reasoning.log       # text log of agent reasoning per step
 └── usage.log           # JSONL token totals per invocation
 ```
@@ -433,7 +433,8 @@ Run `aca paths` to see the actual resolved locations on your system.
    │             - prompt_user / prompt_user_multi          │
    │             - execute_aws_command                      │
    │             - execute_bash_script                      │
-   │             - search_aws_docs (AWS Knowledge MCP)      │
+   │             - search_aws_documentation /               │
+   │               read_aws_documentation (AWS MCP Server)  │
    │                       │                                │
    │                       ▼                                │
    │            ┌──────────────────────┐                    │
