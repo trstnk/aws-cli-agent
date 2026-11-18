@@ -16,7 +16,7 @@ import { runAgent } from './agent.js';
 import { FILES, PATHS, DEFAULT_SCRIPT_FOLDER } from './paths.js';
 import { UserCancelledError } from './errors.js';
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 
 type GlobalOptions = {
   /** Toggles reasoning-on-console only. Does NOT change general log level. */
