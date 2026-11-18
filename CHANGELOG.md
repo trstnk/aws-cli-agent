@@ -21,7 +21,10 @@ versioning follows [SemVer](https://semver.org/).
   - Duplicated rules merged: the old operating rules 2 and 3 repeated the "don't guess" examples and are now part of that section.
   - The final-action rule now says why: the host prints the last command's output as the answer.
   - The per-step narration line says what it is for (the host shows it as a progress line).
-  - About 13% shorter (5,850 vs 6,760 characters).
+  - New "Narrowing output" section to cut the tokens spent on AWS CLI output: filter on the server first (`--filters`, `--prefix`, `--name-prefix`, ...), then keep only the needed fields with a `--query` JMESPath projection, with EC2, S3 and Lambda examples. Single values and counts use `--query ... --output text` or `length(...)`. With `--max-items`, `NextToken` stays in the projection so the agent can tell whether more results exist. A `--query` that unexpectedly returns null or empty is retried once with a corrected path, since a wrong path also returns nothing. The final, user-facing command shows the columns that answer the request as a table, keeps every field the user asked for, and is not narrowed when the user asks for full or raw details.
+  - Bash scripts narrow each `aws` call with `--query` as well, and print only the final, reduced result.
+  - The `execute_aws_command` tool description repeats the advice to use server-side filters and a `--query` projection on lookup calls.
+  - The rewording made the prompt about 13% shorter (5,850 vs 6,760 characters), but the new output-narrowing guidance makes it about 16% longer overall (7,811 characters). On Anthropic and Bedrock the system prompt is cached.
 - **Dependencies**: added `@ai-sdk/mcp` 2.0.81 (MCP client over Streamable HTTP).
 
 ## [0.8.0] - 2026-10-22
