@@ -75,6 +75,22 @@ const OpenAICompatibleSchema = z
   })
   .optional();
 
+/**
+ * Reasoning levels accepted by the AI SDK's provider-neutral `reasoning`
+ * call option. Each provider maps the level to its own setting: Anthropic
+ * effort, Bedrock `maxReasoningEffort`, OpenAI `reasoning_effort`.
+ */
+export const REASONING_LEVELS = [
+  'provider-default',
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+
 export const ConfigSchema = z.object({
   /**
    * Which provider is active. The matching top-level block (anthropic /
@@ -104,6 +120,14 @@ export const ConfigSchema = z.object({
   /** Max reasoning/tool-use steps before the agent must conclude. */
   maxSteps: z.number().int().min(1).max(50).default(15),
 
+  /**
+   * How much the model thinks per step. `provider-default` sends nothing, so
+   * the provider's own default applies; that is the safe choice for
+   * models or local servers that reject a reasoning setting. Override
+   * per-run with --reasoning.
+   */
+  reasoning: z.enum(REASONING_LEVELS).default('provider-default'),
+
   /** All logging knobs. */
   logging: LoggingSchema,
 
@@ -127,7 +151,10 @@ export const ConfigSchema = z.object({
     .object({
       /** Auto-approve read-only AWS commands (describe-*, list-*, get-*, s3 ls). */
       readOnly: z.boolean().default(true),
-      /** Auto-approve every command and script. Dangerous. */
+      /**
+       * Auto-approve every command and docs lookup. Dangerous. (Scripts
+       * always prompt; `readOnly` does not cover docs lookups.)
+       */
       all: z.boolean().default(false),
     })
     .default({ readOnly: true, all: false }),
@@ -147,6 +174,20 @@ export const ConfigSchema = z.object({
    * $XDG_DATA_HOME/aws-cli-agent/scripts.
    */
   scriptFolder: z.string().optional(),
+
+  /**
+   * AWS documentation lookup via the AWS MCP Server. The agent
+   * uses it only when the right CLI command isn't obvious. Search phrases
+   * are sent to the server, so set `enabled: false` if that's not acceptable.
+   * `url` defaults to the eu-central-1 endpoint; endpoints for other regions
+   * are listed in the AWS Agent Toolkit user guide.
+   */
+  docs: z
+    .object({
+      enabled: z.boolean().default(true),
+      url: z.url().default('https://aws-mcp.eu-central-1.api.aws/mcp'),
+    })
+    .default({ enabled: true, url: 'https://aws-mcp.eu-central-1.api.aws/mcp' }),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

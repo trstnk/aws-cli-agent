@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.9.0] - 2026-11-18
+
+### Added
+
+- **AWS documentation lookup**: new `search_aws_documentation` and `read_aws_documentation` tools backed by the [AWS MCP Server](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html) (`https://aws-mcp.eu-central-1.api.aws/mcp`; its documentation tools are public and need no credentials). `search_aws_documentation` returns ranked excerpts from the CLI reference and CLI code examples. Language-SDK pages (boto3, botocore, Kotlin, ...) and AWS CLI v1 duplicates are filtered out when CLI pages are available. `read_aws_documentation` fetches a page as markdown, 8,000 characters at a time. The tool descriptions restrict them to cases where the correct command is not obvious, and say it must never be used to answer general AWS questions. Their output is treated as untrusted data, like the other tools' output. Lookups fail soft: if the server is unreachable, the tool reports an error and the agent carries on without it. Every lookup, including declined and failed ones, is written to the audit log as a `docs_search` or `docs_read` entry with the server, the input sent, and the result returned to the agent.
+- **Config**: new `docs` block (`enabled`, default `true`; `url`, default the AWS MCP Server endpoint in eu-central-1; endpoints for other regions are listed in the [AWS Agent Toolkit documentation](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html)). With `enabled: false` neither tool is registered. Each lookup asks for approval first, showing the search phrase or URL and the server it goes to. Declining makes the agent continue without the docs. `autoApprove.all: true` or the `--auto-approve` flag skips the prompt; `autoApprove.readOnly` doesn't.
+
+- **Reasoning effort**: new top-level `reasoning` config key and `--reasoning <level>` flag (`provider-default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). It is passed to the AI SDK's provider-neutral `reasoning` option, which each provider maps to its own setting (Anthropic `effort`, Bedrock `maxReasoningEffort`, OpenAI `reasoning_effort`). The default `provider-default` sends nothing, so existing setups behave as before.
+
+### Changed
+
+- **System prompt** reworked for current models (tuned against Claude Sonnet 5.5), with no rule removed:
+  - Plain register instead of capitalised pressure words ("ONLY", "NEVER", "CARDINAL RULE", "MUST"), with the reason given beside each constraint. Current models follow the prompt closely, so shouted rules tend to over-apply.
+  - The "Tools:" list was dropped: it repeated the tool definitions and referred to the docs tool even when docs are disabled. When to use the docs tools now lives only in their own descriptions.
+  - Duplicated rules merged: the old operating rules 2 and 3 repeated the "don't guess" examples and are now part of that section.
+  - The final-action rule now says why: the host prints the last command's output as the answer.
+  - The per-step narration line says what it is for (the host shows it as a progress line).
+  - New "Narrowing output" section to cut the tokens spent on AWS CLI output: filter on the server first (`--filters`, `--prefix`, `--name-prefix`, ...), then keep only the needed fields with a `--query` JMESPath projection, with EC2, S3 and Lambda examples. Single values and counts use `--query ... --output text` or `length(...)`. With `--max-items`, `NextToken` stays in the projection so the agent can tell whether more results exist. A `--query` that unexpectedly returns null or empty is retried once with a corrected path, since a wrong path also returns nothing. The final, user-facing command shows the columns that answer the request as a table, keeps every field the user asked for, and is not narrowed when the user asks for full or raw details.
+  - Bash scripts narrow each `aws` call with `--query` as well, and print only the final, reduced result.
+  - The `execute_aws_command` tool description repeats the advice to use server-side filters and a `--query` projection on lookup calls.
+  - The rewording made the prompt about 13% shorter (5,850 vs 6,760 characters), but the new output-narrowing guidance makes it about 16% longer overall (7,811 characters). On Anthropic and Bedrock the system prompt is cached.
+- **Dependencies**: added `@ai-sdk/mcp` 2.0.81 (MCP client over Streamable HTTP).
+
 ## [0.8.0] - 2026-10-22
 
 ### Added

@@ -1,6 +1,12 @@
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, validateActiveProvider, writeDefaultConfig, type Config } from './config.js';
+import {
+  loadConfig,
+  REASONING_LEVELS,
+  validateActiveProvider,
+  writeDefaultConfig,
+  type Config,
+} from './config.js';
 import { Logger, type LogLevel } from './logger.js';
 import { AuditLogger } from './audit.js';
 import { ReasoningLogger } from './reasoning.js';
@@ -10,7 +16,7 @@ import { runAgent } from './agent.js';
 import { FILES, PATHS, DEFAULT_SCRIPT_FOLDER } from './paths.js';
 import { UserCancelledError } from './errors.js';
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 
 type GlobalOptions = {
   /** Toggles reasoning-on-console only. Does NOT change general log level. */
@@ -22,6 +28,8 @@ type GlobalOptions = {
   region?: string;
   /** Force every AWS CLI call to run with inherited stdio (interactive). */
   interactive?: boolean;
+  /** Per-run override of config.reasoning. */
+  reasoning?: Config['reasoning'];
 };
 
 /**
@@ -45,6 +53,9 @@ function applyCliOverrides(cfg: Config, opts: GlobalOptions): Config {
   if (opts.interactive) {
     next = { ...next, forceInteractive: true };
   }
+  if (opts.reasoning) {
+    next = { ...next, reasoning: opts.reasoning };
+  }
   return next;
 }
 
@@ -64,7 +75,7 @@ export async function main(argv: string[]): Promise<void> {
     )
     .option(
       '--auto-approve',
-      'auto-approve all commands and scripts for this run (use with care)',
+      'auto-approve all commands, scripts, and docs lookups for this run (use with care)',
     )
     .option('--profile <name>', 'hint the agent to use this AWS profile')
     .option(
@@ -75,6 +86,11 @@ export async function main(argv: string[]): Promise<void> {
       '-i, --interactive',
       'force AWS CLI commands to inherit your terminal (for shells, port-forwards, log tails). ' +
         'Common patterns auto-detect; this is the manual override.',
+    )
+    .addOption(
+      new Option('--reasoning <level>', 'override reasoning (thinking effort) for this run').choices(
+        REASONING_LEVELS,
+      ),
     );
 
   program

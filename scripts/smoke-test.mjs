@@ -156,6 +156,14 @@ async function main() {
     assert(shortForm.status === 0, `-i: exit ${shortForm.status}, stderr=${shortForm.stderr}`);
   });
 
+  await check('--reasoning accepts known levels and rejects others', () => {
+    const ok = runCli(['--reasoning', 'medium', '--help']);
+    assert(ok.status === 0, `--reasoning medium: exit ${ok.status}, stderr=${ok.stderr}`);
+    // Not combined with --help, which commander handles before validating.
+    const bad = runCli(['--reasoning', 'extreme', 'paths']);
+    assert(bad.status !== 0, '--reasoning extreme was accepted');
+  });
+
   await check('--quiet flag is rejected (removed in 0.3.0)', () => {
     // Don't combine with --help: commander processes --help first and returns 0
     // before validating other options. Pass --quiet alone.
@@ -184,6 +192,7 @@ async function main() {
         verbose: false,
         autoApprove: { readOnly: true, all: false },
         historyLimit: 0,
+        docs: { enabled: false, url: 'https://aws-mcp.eu-central-1.api.aws/mcp' },
       },
       history: { search: () => [], recent: () => [], append: () => {} },
       audit: new AuditLogger(false),
@@ -200,6 +209,35 @@ async function main() {
         ...(kind === 'choice' ? { choices: ['a', 'b'] } : {}),
       });
       assert(r.success, `prompt_user rejected valid kind=${kind}`);
+    }
+  });
+
+  await check('docs tools register only when docs.enabled', async () => {
+    // Building the tool must not touch the network — the MCP client is only
+    // created inside execute().
+    const { createTools } = await import(`file://${path.join(distDir, 'tools/index.js')}`);
+    const { Logger } = await import(`file://${path.join(distDir, 'logger.js')}`);
+    const { AuditLogger } = await import(`file://${path.join(distDir, 'audit.js')}`);
+    const { ConfigSchema } = await import(`file://${path.join(distDir, 'config.js')}`);
+    const build = (docs) =>
+      createTools({
+        logger: new Logger('silent'),
+        config: ConfigSchema.parse(docs === undefined ? {} : { docs }),
+        history: { search: () => [], recent: () => [], append: () => {} },
+        audit: new AuditLogger(false),
+        record: () => {},
+      });
+    const tools = build(undefined);
+    const disabled = build({ enabled: false });
+    const cases = {
+      search_aws_documentation: { query: 'q' },
+      read_aws_documentation: { url: 'https://docs.aws.amazon.com/x' },
+    };
+    for (const [name, input] of Object.entries(cases)) {
+      assert(name in tools, `${name} missing with default config`);
+      const r = tools[name].inputSchema.safeParse(input);
+      assert(r.success, `${name} rejected valid input ${JSON.stringify(input)}`);
+      assert(!(name in disabled), `${name} registered while disabled`);
     }
   });
 

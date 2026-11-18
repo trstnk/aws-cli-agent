@@ -183,7 +183,7 @@ export function awsCliTool(opts: {
 }): Tool {
   return tool({
     description:
-      'Execute an AWS CLI command. `args` does NOT include the leading "aws" - just the subcommand and parameters, e.g. ["ec2","describe-instances","--profile","my-profile","--output","json"]. ALWAYS use --output json on discovery calls so you can parse results. Read-only commands (describe-/list-/get-/s3 ls) auto-approve if allowed by config; mutating commands always prompt. ' +
+      'Execute an AWS CLI command. `args` does NOT include the leading "aws" - just the subcommand and parameters, e.g. ["ec2","describe-instances","--profile","my-profile","--output","json"]. ALWAYS use --output json on discovery calls so you can parse results, and narrow them with server-side filters (--filters, --prefix, ...) and a --query JMESPath projection that returns only the fields you need.Read-only commands (describe-/list-/get-/s3 ls) auto-approve if allowed by config; mutating commands always prompt. ' +
       'Set `interactive: true` for commands that need direct terminal access — interactive shells (ssm start-session, ecs execute-command), port-forwarding sessions, log tails with --follow. Common interactive patterns auto-detect, but you can force it. When interactive, the child process is connected directly to the user\'s terminal; you will not see the output and should not attempt to parse it.',
     inputSchema: z.object({
       args: z.array(z.string()).min(1).describe('Arguments after the "aws" binary.'),

@@ -140,13 +140,16 @@ The config file is created with file mode `0600` (owner read/write only) when `a
 | `defaultRegion` | — | AWS region injected into every AWS CLI command when the agent didn't specify one |
 | `caching` | `true` | Enable prompt caching for providers that support it. See "Prompt caching" below. |
 | `maxSteps` | `15` | Hard cap on agent reasoning/tool steps per request (range 1-50) |
+| `reasoning` | `provider-default` | How much the model thinks per step: `provider-default` \| `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. See "Reasoning effort" below. |
 | `logging` | see below | All logging knobs |
 | `verbose` | `false` | Echo agent reasoning to the console as it runs |
 | `autoApprove.readOnly` | `true` | Skip prompt for read-only AWS CLI commands (`describe-*` / `list-*` / `get-*` / `s3 ls`) |
-| `autoApprove.all` | `false` | Skip prompt for **all AWS CLI commands** including mutating ones. Does NOT apply to bash scripts — those always prompt. |
+| `autoApprove.all` | `false` | Skip prompt for **all AWS CLI commands** including mutating ones, and for documentation lookups. Does NOT apply to bash scripts — those always prompt. |
 | `forceInteractive` | `false` | Run every AWS CLI command with inherited stdio. Persistent equivalent of `--interactive`/`-i`. Almost always leave unset and use the CLI flag for one-offs. |
 | `historyLimit` | `200` | Max history entries kept in memory for context |
 | `scriptFolder` | `$XDG_DATA_HOME/aws-cli-agent/scripts` | Where saved bash scripts are written |
+| `docs.enabled` | `true` | Give the agent the `search_aws_documentation` and `read_aws_documentation` tools. See "AWS documentation lookup" below. |
+| `docs.url` | `https://aws-mcp.eu-central-1.api.aws/mcp` | Endpoint of the AWS MCP Server (eu-central-1). For other regions see the [AWS Agent Toolkit documentation](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html). |
 
 ### Per-provider keys (anthropic, openai, google)
 
@@ -245,9 +248,21 @@ Notes:
 | Key | Default | Meaning |
 |---|---|---|
 | `logging.level` | `error` | General-log verbosity: `silent` \| `error` \| `warn` \| `info` \| `debug` \| `trace`. Override per run with `--log-level`. |
-| `logging.auditLog` | `true` | Write `audit.log` — JSONL trail of every executed command/script with full stdout/stderr/exit code. Bash scripts also log full source. |
+| `logging.auditLog` | `true` | Write `audit.log` — JSONL trail of every executed command/script with full stdout/stderr/exit code. Bash scripts also log full source. Documentation searches and reads are logged with the server, the query or URL sent, and the result returned to the agent. |
 | `logging.reasoningLog` | `false` | Write `reasoning.log` — text record of agent reasoning steps and tool calls. |
 | `logging.usageLog` | `true` | Write `usage.log` — one JSONL entry per `aca` invocation with token totals (input + completion + total + cache hit/miss). |
+
+### Reasoning effort
+
+`reasoning` sets how much the model thinks before each step, using the AI SDK's provider-neutral `reasoning` option. Each provider translates it to its own setting:
+
+| Provider | Sent for `"medium"` |
+|---|---|
+| `anthropic` | adaptive thinking with `effort: "medium"` (on newer Claude models; older ones get a thinking budget) |
+| `bedrock` (Claude models) | adaptive thinking with `maxReasoningEffort: "medium"` |
+| `openai`, `openai-compatible` | `reasoning_effort: "medium"` |
+
+The default, `provider-default`, sends nothing, so each model runs at its provider's default. Keep it for models or local servers that reject a reasoning setting. For Claude Sonnet 5.5, `medium` is a good starting point for multi-step tool use: Anthropic reports it usually finishes in fewer steps and costs less than the provider default (`high`). Override per run with `--reasoning <level>`.
 
 ### `defaultRegion` and `--region`
 
@@ -302,6 +317,22 @@ What would you like to do with this script?
 
 The prompt is **always** shown for scripts, even when `autoApprove.all` is on. Scripts are arbitrary code with shell-level capability — the auto-approve switch deliberately doesn't apply to them. `autoApprove` still affects individual AWS CLI commands as documented above.
 
+### AWS documentation lookup
+
+When the right command isn't obvious — an unfamiliar subcommand, unsure flag names or required parameters, the JSON shape of a structured argument, or a CLI error it can't explain — the agent can look it up with the `search_aws_documentation` and `read_aws_documentation` tools. It queries the [AWS MCP Server](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html), an AWS-managed endpoint whose documentation tools are public and need no AWS account or credentials. The default endpoint is in eu-central-1 (Frankfurt). To use another region, set `docs.url` to that region's endpoint; the list of endpoints is in the [AWS Agent Toolkit documentation](https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html). The agent can search the documentation (results are verbatim page excerpts) and read a page, usually the CLI reference for the command (`docs.aws.amazon.com/cli/latest/reference/<service>/<command>.html`). For commands the model already knows, it skips the lookup.
+
+Before a lookup is sent, `aca` shows the search phrase or page URL and the server it goes to, and asks for approval:
+
+```
+  Docs search: aws cli s3api put-bucket-lifecycle-configuration noncurrent version expiration
+  Sent to: https://aws-mcp.eu-central-1.api.aws/mcp
+? Send this AWS documentation lookup? (Y/n)
+```
+
+If you decline, the agent continues without the docs. Lookups can't change anything, so the prompt is there to let you check what leaves your machine. Set `autoApprove.all: true`, or pass `--auto-approve` for one run, to skip it. `autoApprove.readOnly` doesn't cover lookups. If the server can't be reached, the agent builds the command without it. Every lookup, including declined and failed ones, is written to `audit.log` (`type: "docs_search"` or `"docs_read"`) with the server, the query or URL, and the result the agent got back.
+
+**Privacy:** search phrases and page URLs are sent to the AWS MCP Server. The agent is told never to include account IDs, resource names, or ARNs in a query, but if no request data may leave your machine except to your LLM provider, set `"docs": { "enabled": false }`. When it's disabled, neither tool is registered.
+
 ## CLI options
 
 ```
@@ -311,12 +342,14 @@ Options:
   -v, --verbose            echo agent reasoning to the console as it runs
   --log-level <level>      override logging.level for this run:
                            silent | error | warn | info | debug | trace
-  --auto-approve           auto-approve all commands and scripts (dangerous)
+  --auto-approve           auto-approve all commands, scripts, and docs lookups (dangerous)
   --profile <name>         hint the agent to use this AWS profile
   --region <name>          override defaultRegion for this run
   -i, --interactive        force AWS CLI commands to inherit your terminal
                            (for shells, port-forwards, log tails — common
                            patterns auto-detect; this is the manual override)
+  --reasoning <level>      override reasoning for this run: provider-default |
+                           none | minimal | low | medium | high | xhigh | max
 
 Commands:
   run <request...>         (default) execute a natural-language request
@@ -372,7 +405,7 @@ State directory contents:
 ~/.local/state/aws-cli-agent/
 ├── history.jsonl       # past requests, for context
 ├── general.log         # general operational log
-├── audit.log           # JSONL audit trail of every executed command
+├── audit.log           # JSONL audit trail of every executed command and docs lookup
 ├── reasoning.log       # text log of agent reasoning per step
 └── usage.log           # JSONL token totals per invocation
 ```
@@ -400,6 +433,8 @@ Run `aca paths` to see the actual resolved locations on your system.
    │             - prompt_user / prompt_user_multi          │
    │             - execute_aws_command                      │
    │             - execute_bash_script                      │
+   │             - search_aws_documentation /               │
+   │               read_aws_documentation (AWS MCP Server)  │
    │                       │                                │
    │                       ▼                                │
    │            ┌──────────────────────┐                    │
@@ -442,7 +477,7 @@ Run `aca paths` to see the actual resolved locations on your system.
 
 **Stateless server-side, with one caveat.** Each call to the LLM provider includes the full conversation history — system prompt, tool definitions, original user request, every prior step's reasoning and tool results. The provider doesn't retain conversation state between calls. **One exception:** when prompt caching is enabled, the provider temporarily stores the cached prefix (the system prompt, ~3,300 tokens) for ~5 minutes so subsequent calls within that window can replay it cheaply. Nothing else is retained.
 
-**Local-only state.** Everything `aca` remembers is on your machine. History (`history.jsonl`), logs (`general.log`, `audit.log`, `reasoning.log`, `usage.log`), and config all live under XDG paths. Saved scripts go to `$XDG_DATA_HOME/aws-cli-agent/scripts/` by default. No remote backend, no telemetry.
+**Local-only state.** Everything `aca` remembers is on your machine. History (`history.jsonl`), logs (`general.log`, `audit.log`, `reasoning.log`, `usage.log`), and config all live under XDG paths. Saved scripts go to `$XDG_DATA_HOME/aws-cli-agent/scripts/` by default. No remote backend, no telemetry. The only outbound traffic besides the LLM provider and your own AWS CLI calls is documentation lookups (see "AWS documentation lookup"), which you can turn off.
 
 **Tools as the safety boundary.** The model can only affect the outside world through tools. Two of them — `execute_aws_command` and `execute_bash_script` — are the destructive paths. Both prompt for user approval by default; read-only AWS CLI commands may auto-approve depending on `autoApprove.readOnly`; bash scripts **always** prompt regardless of auto-approve settings.
 

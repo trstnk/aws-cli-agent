@@ -3,10 +3,11 @@ import { FILES, PATHS } from './paths.js';
 
 /**
  * Audit log: append-only JSONL of every command and script the agent ran on
- * the user's behalf. The audit log is intentionally exhaustive — it captures
- * the verbatim stdout/stderr so that, after the fact, you can reconstruct
- * exactly what the agent did and what AWS returned. For bash scripts the full
- * script source is included.
+ * the user's behalf, and of every documentation lookup. The audit log is
+ * intentionally exhaustive — it captures the verbatim stdout/stderr so that,
+ * after the fact, you can reconstruct exactly what the agent did and what AWS
+ * returned. For bash scripts the full script source is included; for doc
+ * lookups, what was sent to the docs server and what the model got back.
  *
  * Disable via `audit.enabled = false` in config; the writer becomes a no-op.
  */
@@ -33,7 +34,21 @@ export type AuditScriptEntry = {
   script: string;
 };
 
-export type AuditEntry = AuditCommandEntry | AuditScriptEntry;
+/**
+ * One documentation search or read. `input` is exactly what was sent (the
+ * search phrase, or the page URL and offset); `result` is the tool result
+ * handed to the model, including declines and errors.
+ */
+export type AuditDocsEntry = {
+  timestamp: string;
+  type: 'docs_search' | 'docs_read';
+  server: string;
+  input: Record<string, unknown>;
+  ok: boolean;
+  result: unknown;
+};
+
+export type AuditEntry = AuditCommandEntry | AuditScriptEntry | AuditDocsEntry;
 
 export class AuditLogger {
   private readonly stream: fs.WriteStream | null;
@@ -53,6 +68,10 @@ export class AuditLogger {
 
   logScript(entry: Omit<AuditScriptEntry, 'timestamp' | 'type'>): void {
     this.write({ timestamp: new Date().toISOString(), type: 'bash_script', ...entry });
+  }
+
+  logDocs(entry: Omit<AuditDocsEntry, 'timestamp'>): void {
+    this.write({ timestamp: new Date().toISOString(), ...entry });
   }
 
   private write(entry: AuditEntry): void {
